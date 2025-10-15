@@ -35,8 +35,8 @@
         .content { padding:10px; font-size:13px; color:#222; }
         .hint { color:#666; font-size:12px; margin-top:6px; }
       </style>
-      <div class="panel" role="dialog" aria-label="ReviewTrust">
-        <div class="hdr"><div class="title">ReviewTrust overlay</div></div>
+      <div class="panel" role="dialog" aria-label="ARC_V1">
+        <div class="hdr"><div class="title">ARC_V1 overlay</div></div>
         <div class="content">
           <div>Click any <b>Trust</b> badge on a review to see details here.</div>
           <div class="hint">Demo logic only (no real ML yet).</div>
