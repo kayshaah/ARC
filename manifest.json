@@ -1,13 +1,13 @@
 {
-  "name": "ARC — Amazon Review Classifier",
+  "name": "ARC v1 — Amazon Review Classifier",
   "description": "Amazon Review Classification Extension - Gr7JKR",
   "version": "1.0",
   "manifest_version": 3,
 
   "action": {
+    "default_title": "ARC v1",
     "default_popup": "hello.html",
-    "default_icon": "icon.png",
-    "default_title": "ARC"
+    "default_icon": "icon.png"
   },
 
   "permissions": ["scripting", "activeTab", "storage"],
@@ -22,6 +22,11 @@
     "https://www.amazon.es/*",
     "https://www.amazon.fr/*"
   ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
 
   "content_scripts": [
     {
