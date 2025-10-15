@@ -1,38 +1,73 @@
 (function () {
-  // ---------------- state & storage ----------------
   let arcEnabled = true;
+  let observer = null;
 
+  // ===== live messaging from popup =====
+  chrome.runtime?.onMessage?.addListener?.((msg, sender, sendResponse) => {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'ARC_TOGGLE') {
+      arcEnabled = !!msg.enabled;
+      if (arcEnabled) boot();
+      else teardown();
+      sendResponse({ ok: true, enabled: arcEnabled });
+    } else if (msg.type === 'ARC_GET_STATUS') {
+      sendResponse({ enabled: !!arcEnabled });
+    }
+    // keep the channel open only for async; here we return immediately
+    return true;
+  });
+
+  // also mirror storage (so new pages pick it up)
   chrome.storage?.local?.get?.({ arcEnabled: true }, (res) => {
     arcEnabled = !!res.arcEnabled;
     if (arcEnabled) boot();
   });
   chrome.storage?.onChanged?.addListener?.((changes) => {
     if ('arcEnabled' in changes) {
-      arcEnabled = changes.arcEnabled.newValue;
-      if (arcEnabled) boot();
-      else teardown();
+      arcEnabled = !!changes.arcEnabled.newValue;
+      // don’t double-boot: if badges exist and enabled -> do nothing
+      const hasBadges = document.querySelector('.arc-badge-host');
+      if (arcEnabled && !hasBadges) boot();
+      if (!arcEnabled) teardown();
     }
   });
 
-  // ---------------- lifecycle ----------------
+  // ===== lifecycle =====
   function boot() {
+    addEnabledDot();       // small indicator so you "see" ARC is on
     attachBadges();
     observeForNewReviews();
   }
   function teardown() {
+    removeEnabledDot();
     document.querySelectorAll('.arc-badge-host').forEach(n => n.remove());
     if (observer) { observer.disconnect(); observer = null; }
   }
 
-  // ---------------- helpers ----------------
+  // ===== tiny enabled dot (top-left corner) =====
+  function addEnabledDot() {
+    if (document.getElementById('arc-enabled-dot')) return;
+    const dot = document.createElement('div');
+    dot.id = 'arc-enabled-dot';
+    Object.assign(dot.style, {
+      position: 'fixed', left: '8px', top: '8px', width: '10px', height: '10px',
+      borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 0 2px rgba(34,197,94,.25)',
+      zIndex: '2147483646', opacity: '0.85', pointerEvents: 'none'
+    });
+    dot.title = 'ARC enabled';
+    document.body.appendChild(dot);
+  }
+  function removeEnabledDot() {
+    document.getElementById('arc-enabled-dot')?.remove();
+  }
+
+  // ===== utilities =====
   function escapeHtml(s){ return s ? s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : ""; }
   function pick(el, sel){ return el.querySelector(sel); }
 
-  // Verified Purchase (robust-ish)
   function isVerifiedPurchase(reviewNode) {
     const badge = reviewNode.querySelector('[data-hook="avp-badge"]');
     if (badge && /verified\s*purchase/i.test(badge.textContent || '')) return true;
-    // fallback: scan small spans for the words
     for (const el of reviewNode.querySelectorAll('span,div')) {
       const t = (el.textContent || '').trim();
       if (t && /(^|\s)verified\s*purchase(\s|$)/i.test(t)) return true;
@@ -40,27 +75,17 @@
     return false;
   }
 
-  // Tiny text+meta scorer
   function baseScore({title, body, verified}) {
     let score = 50;
     const txt = (title || "") + " " + (body || "");
     const len = txt.trim().length;
-
     if (verified) score += 20;
-    if (len < 40) score -= 20;
-    else if (len < 120) score -= 5;
-    else score += 5;
-
+    if (len < 40) score -= 20; else if (len < 120) score -= 5; else score += 5;
     const lower = txt.toLowerCase();
-    ["amazing product","highly recommend","best purchase","works great"].forEach(p => {
-      if (lower.includes(p)) score -= 5;
-    });
-
-    score = Math.max(0, Math.min(100, Math.round(score)));
-    return score;
+    ["amazing product","highly recommend","best purchase","works great"].forEach(p => { if (lower.includes(p)) score -= 5; });
+    return Math.max(0, Math.min(100, Math.round(score)));
   }
 
-  // Reviewer backtrack on this page
   function sameAuthorPageHistory(authorName, currentNode) {
     if (!authorName) return [];
     const nodes = findReviewNodes();
@@ -83,15 +108,13 @@
     return matches;
   }
 
-  // Try to fetch reviewer profile (best effort)
   async function fetchReviewerProfile(authorHref, limit = 5) {
     try {
       if (!authorHref) return [];
-      const res = await fetch(authorHref, { credentials: 'include' }); // same-domain, might work
+      const res = await fetch(authorHref, { credentials: 'include' });
       if (!res.ok) return [];
       const html = await res.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
-      // Heuristic selectors – Amazon varies. We try a few.
       const items = [];
       const blocks = doc.querySelectorAll('[data-hook="review"], .review, .profile-at-card, .a-section.review');
       for (const el of blocks) {
@@ -102,7 +125,6 @@
         const rText = el.querySelector('[data-hook="review-star-rating"]')?.innerText
                 || el.querySelector('.a-icon-alt')?.innerText || "";
         const rating = rText ? parseFloat(rText.split(" ")[0]) : null;
-        // Try a broad verified check on the profile DOM
         let vp = false;
         const badge = el.querySelector('[data-hook="avp-badge"]');
         if (badge && /verified\s*purchase/i.test(badge.textContent || '')) vp = true;
@@ -121,7 +143,6 @@
     }
   }
 
-  // Use history to nudge score a bit
   function applyHistoryNudges(score, history) {
     if (!history?.length) return score;
     const withRatings = history.filter(h => typeof h.rating === 'number');
@@ -131,11 +152,10 @@
     const allFive = withRatings.length >= 3 && withRatings.every(h => h.rating >= 4.5);
     if (avg && avg >= 3.5 && verifiedCount >= 1) score += 3;
     if (longCount >= 2) score += 2;
-    if (allFive && verifiedCount === 0) score -= 4; // suspiciously rosy, no VP
+    if (allFive && verifiedCount === 0) score -= 4;
     return Math.max(0, Math.min(100, score));
   }
 
-  // Tooltip UI inside badge shadow (no global overlay)
   function buildTooltipHTML(data) {
     const { score, reasons, history } = data;
     const good = score >= 60;
@@ -184,7 +204,14 @@
     `;
   }
 
-  // ---------------- badges & observers ----------------
+  function createTooltip(shadowRoot, data) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = buildTooltipHTML(data);
+    const el = wrap.firstElementChild;
+    shadowRoot.appendChild(el);
+    return el;
+  }
+
   function findReviewNodes() {
     const sels = ['[data-hook="review"]', '.review', '.a-section.review'];
     const nodes = [];
@@ -209,14 +236,12 @@
       const author = pick(node,'.a-profile-name')?.innerText?.trim() || "Unknown";
       const authorHref = pick(node,'.a-profile')?.href || null;
 
-      // create host on the review
       const host = document.createElement('div');
       host.className = 'arc-badge-host';
       host.style.position = 'relative';
       node.style.position = node.style.position || 'relative';
       node.prepend(host);
 
-      // shadow + badge
       const sr = host.attachShadow({ mode:'open' });
       sr.innerHTML = `
         <style>
@@ -232,11 +257,7 @@
       `;
       const badge = sr.querySelector('.badge');
 
-      // compute score
       let score = baseScore({title, body, verified});
-      const pageHist = sameAuthorPageHistory(author, node);
-
-      // async: try profile fetch, then refine score + show tooltip content freshly when available
       let tooltipEl = null;
       let tooltipData = {
         score,
@@ -244,10 +265,9 @@
           verified ? 'Verified purchase' : 'Unverified',
           ((title+body).length < 40) ? 'Very short' : ((title+body).length < 120) ? 'Short' : 'Detailed'
         ],
-        history: pageHist
+        history: sameAuthorPageHistory(author, node)
       };
 
-      // set badge color (soft green if positive, soft red if negative)
       function paintBadge(sc) {
         const good = sc >= 60;
         badge.style.background = good ? '#eef9f1' : '#fff1f1';
@@ -256,15 +276,13 @@
       }
       paintBadge(score);
 
-      // Try to fetch reviewer profile (best-effort)
       (async () => {
         const prof = await fetchReviewerProfile(authorHref, 5);
         if (prof.length) {
-          const allHistory = [...pageHist, ...prof];
+          const allHistory = [...tooltipData.history, ...prof];
           const newScore = applyHistoryNudges(score, allHistory);
           tooltipData = { ...tooltipData, score: newScore, history: allHistory };
           paintBadge(newScore);
-          // if tooltip is currently open, refresh it
           if (tooltipEl && tooltipEl.isConnected) {
             tooltipEl.remove();
             tooltipEl = createTooltip(sr, tooltipData);
@@ -272,32 +290,17 @@
         }
       })();
 
-      // Tooltip on hover/focus
-      function createTooltip(shadowRoot, data) {
-        const wrap = document.createElement('div');
-        wrap.innerHTML = buildTooltipHTML(data);
-        const el = wrap.firstElementChild;
-        shadowRoot.appendChild(el);
-        return el;
-      }
-      function showTooltip() {
-        if (tooltipEl) return;
-        tooltipEl = createTooltip(sr, tooltipData);
-      }
-      function hideTooltip() {
-        if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; }
-      }
+      function showTooltip() { if (!tooltipEl) tooltipEl = createTooltip(sr, tooltipData); }
+      function hideTooltip() { if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; } }
 
       badge.addEventListener('mouseenter', showTooltip);
       badge.addEventListener('mouseleave', hideTooltip);
       badge.addEventListener('focus', showTooltip);
       badge.addEventListener('blur', hideTooltip);
-      // also hide when scrolling to avoid “stuck” tooltips
       window.addEventListener('scroll', hideTooltip, { passive:true });
     });
   }
 
-  let observer = null;
   function observeForNewReviews() {
     const container = document.querySelector('#reviewsMedley, #cm_cr-review_list, #reviews-container, body');
     observer = new MutationObserver(() => setTimeout(attachBadges, 150));
