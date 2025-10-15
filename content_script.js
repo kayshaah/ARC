@@ -1,15 +1,47 @@
 (function () {
+  // ---- state
+  let arcEnabled = true;
+  let observer = null;
+
+  // ---- storage: read initial state, then boot
+  chrome.storage?.local?.get?.({ arcEnabled: true }, (res) => {
+    arcEnabled = !!res.arcEnabled;
+    if (arcEnabled) boot();
+  });
+
+  // react to popup toggle changes in real time
+  chrome.storage?.onChanged?.addListener?.((changes) => {
+    if ('arcEnabled' in changes) {
+      arcEnabled = changes.arcEnabled.newValue;
+      if (arcEnabled) {
+        boot();
+      } else {
+        teardown();
+      }
+    }
+  });
+
+  function boot() {
+    makePanelOnce();
+    attachBadges();
+    watchForChanges();
+  }
+
+  function teardown() {
+    // remove panel
+    document.getElementById('arc-panel-host')?.remove();
+    // remove all badges
+    document.querySelectorAll('.arc-badge-host').forEach(n => n.remove());
+    // disconnect observer
+    if (observer) { observer.disconnect(); observer = null; }
+  }
+
   // -------- helpers
   function ready(fn) {
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", fn);
-    } else {
-      fn();
-    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
+    else fn();
   }
-  function escapeHtml(s) {
-    return s ? s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : "";
-  }
+  function escapeHtml(s) { return s ? s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : ""; }
 
   // -------- overlay
   function makePanelOnce() {
@@ -17,24 +49,28 @@
 
     const host = document.createElement("div");
     host.id = "arc-panel-host";
-    host.style.position = "fixed";
-    host.style.right = "12px";
-    host.style.bottom = "12px";
-    host.style.zIndex = "2147483646";
+    Object.assign(host.style, { position:"fixed", right:"12px", bottom:"12px", zIndex:"2147483646" });
 
     const sr = host.attachShadow({ mode: "open" });
     sr.innerHTML = `
       <style>
-        .panel { width: 320px; max-width: calc(100vw - 24px); background: #fff;
+        .panel { width: 340px; max-width: calc(100vw - 24px); background: #fff;
                  border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.2);
-                 font-family: system-ui, Arial, sans-serif; overflow: hidden; }
+                 font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; overflow: hidden; }
         .hdr { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid #eee; }
-        .title { font-weight:600; font-size:14px; }
+        .title { font-weight:700; font-size:14px; letter-spacing:.2px; }
+        .spacer { flex:1; }
+        .btn { background:transparent; border:none; cursor:pointer; padding:6px; border-radius:8px; font-size:14px; }
+        .btn:hover { background:#f3f3f3; }
         .content { padding:10px; font-size:13px; color:#222; }
         .hint { color:#666; font-size:12px; margin-top:6px; }
       </style>
       <div class="panel" role="dialog" aria-label="ARC v1">
-        <div class="hdr"><div class="title">ARC v1 overlay</div></div>
+        <div class="hdr">
+          <div class="title">ARC v1 overlay</div>
+          <div class="spacer"></div>
+          <button id="arc-quit" class="btn" title="Turn off ARC">✕</button>
+        </div>
         <div class="content">
           <div>Click any <b>Trust</b> badge on a review to see details here.</div>
           <div class="hint">Demo logic only (no real ML yet).</div>
@@ -42,6 +78,12 @@
       </div>
     `;
     document.body.appendChild(host);
+
+    // QUIT button: disables ARC globally via storage and cleans UI
+    sr.getElementById('arc-quit').addEventListener('click', () => {
+      chrome.storage?.local?.set?.({ arcEnabled: false });
+      teardown();
+    });
   }
 
   // -------- find reviews
@@ -50,6 +92,21 @@
     const nodes = [];
     sel.forEach(s => document.querySelectorAll(s).forEach(n => nodes.push(n)));
     return [...new Set(nodes)];
+  }
+
+  // -------- verified-purchase (more robust)
+  function isVerifiedPurchase(reviewNode) {
+    // 1) canonical badge
+    const badge = reviewNode.querySelector('[data-hook="avp-badge"]');
+    if (badge && /verified\s*purchase/i.test(badge.textContent || '')) return true;
+
+    // 2) some layouts render just text somewhere in the meta row
+    const textCandidates = reviewNode.querySelectorAll('span, div');
+    for (const el of textCandidates) {
+      const t = (el.textContent || '').trim();
+      if (t && /(^|\s)verified\s*purchase(\s|$)/i.test(t)) return true;
+    }
+    return false;
   }
 
   // -------- toy scoring
@@ -79,6 +136,7 @@
 
   // -------- attach badges
   function attachBadges() {
+    if (!arcEnabled) return;
     const reviews = findReviewNodes();
     reviews.forEach(node => {
       if (node.querySelector(".arc-badge-host")) return;
@@ -90,7 +148,7 @@
       const ratingText = node.querySelector('[data-hook="review-star-rating"]')?.innerText
         || node.querySelector('.a-icon-alt')?.innerText || "";
       const rating = ratingText ? parseFloat(ratingText.split(" ")[0]) : null;
-      const verified = !!node.querySelector('[data-hook="avp-badge"]') || !!node.querySelector('.a-profile-star');
+      const verified = isVerifiedPurchase(node);
       const author = node.querySelector('.a-profile-name')?.innerText?.trim() || "Unknown";
 
       const host = document.createElement("div");
@@ -103,7 +161,8 @@
       sr.innerHTML = `
         <style>
           .badge { position: absolute; top: 6px; right: 6px; padding: 6px 8px; border-radius: 8px;
-                   font-family: system-ui, Arial, sans-serif; font-weight: 600; font-size: 12px; cursor: pointer;
+                   font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+                   font-weight: 700; font-size: 12px; cursor: pointer;
                    box-shadow: 0 4px 14px rgba(0,0,0,.15); transition: transform .15s ease; user-select: none; }
           .badge:hover { transform: translateY(-2px); }
           .high   { background: #e9ffe9; color:#0a5a2b; }
@@ -116,7 +175,7 @@
 
       const res = toyScore(title, body, verified);
       badge.textContent = String(res.score) + "%";
-      badge.classList.remove("high", "medium", "low");
+      badge.classList.remove("high","medium","low");
       badge.classList.add(res.level);
 
       badge.addEventListener("click", () => {
@@ -142,17 +201,13 @@
     });
   }
 
-  // -------- watcher
+  // -------- observer (handles Amazon’s dynamic loading)
   function watchForChanges() {
     const container = document.querySelector("#reviewsMedley, #cm_cr-review_list, #reviews-container, body");
-    const obs = new MutationObserver(() => setTimeout(attachBadges, 200));
-    obs.observe(container || document.body, { childList: true, subtree: true });
+    observer = new MutationObserver(() => setTimeout(attachBadges, 200));
+    observer.observe(container || document.body, { childList: true, subtree: true });
   }
 
-  // -------- run
-  ready(() => {
-    makePanelOnce();
-    attachBadges();
-    watchForChanges();
-  });
+  // run after DOM is ready if enabled
+  ready(() => { if (arcEnabled) boot(); });
 })();
