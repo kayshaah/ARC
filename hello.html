@@ -2,18 +2,45 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>ReviewTrust</title>
+    <title>ARC v1</title>
     <style>
-      body { font-family: system-ui, Arial, sans-serif; padding: 12px; width: 260px; }
-      h3 { margin: 0 0 8px; }
-      p { margin: 6px 0; font-size: 14px; }
-      code { background:#f3f3f3; padding:2px 4px; border-radius:4px; }
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin:0; width:320px; }
+      .bar { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; 
+             background: linear-gradient(180deg,#fff,#f6f6f7); border-bottom:1px solid #e6e6e6; }
+      .title { font-weight:700; font-size:14px; letter-spacing:.2px; }
+      .sub { padding:12px 14px; font-size:13px; color:#444; }
+      .row { display:flex; align-items:center; justify-content:space-between; }
+      /* toggle */
+      .switch { position:relative; width:46px; height:26px; }
+      .switch input { display:none; }
+      .slider { position:absolute; cursor:pointer; inset:0; background:#cfcfcf; border-radius:999px; transition: .2s; }
+      .slider:before { content:""; position:absolute; height:20px; width:20px; left:3px; top:3px; 
+                       background:white; border-radius:50%; transition:.2s; box-shadow:0 1px 4px rgba(0,0,0,.2); }
+      input:checked + .slider { background:#22c55e; }
+      input:checked + .slider:before { transform: translateX(20px); }
+      .hint { font-size:12px; color:#666; margin-top:8px; }
     </style>
   </head>
   <body>
-    <h3>ARC Extension is ON ✅</h3>
-    <p>Open any Amazon product page with reviews.</p>
-    <p>You’ll see a small floating box and “Trust” badges on reviews.</p>
-    <p>If nothing shows, reload the page.</p>
+    <div class="bar">
+      <div class="title">ARC v1</div>
+      <label class="switch" title="Enable/disable overlay">
+        <input id="arcToggle" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="sub">
+      <div class="row"><div>Amazon Review Classifier overlay</div></div>
+      <div class="hint">Toggle to show/hide badges & panel on Amazon pages.</div>
+    </div>
+    <script>
+      // initialize toggle from storage (default ON)
+      const toggle = document.getElementById('arcToggle');
+      chrome.storage.local.get({ arcEnabled: true }, ({ arcEnabled }) => { toggle.checked = arcEnabled; });
+      toggle.addEventListener('change', () => {
+        chrome.storage.local.set({ arcEnabled: toggle.checked });
+      });
+    </script>
   </body>
 </html>
