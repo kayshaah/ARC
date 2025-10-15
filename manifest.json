@@ -14,12 +14,27 @@
 
   "host_permissions": [
     "https://www.amazon.com/*",
-    "https://www.amazon.*/*"
+    "https://www.amazon.ca/*",
+    "https://www.amazon.co.uk/*",
+    "https://www.amazon.in/*",
+    "https://www.amazon.de/*",
+    "https://www.amazon.it/*",
+    "https://www.amazon.es/*",
+    "https://www.amazon.fr/*"
   ],
 
   "content_scripts": [
     {
-      "matches": ["https://www.amazon.com/*", "https://www.amazon.*/*"],
+      "matches": [
+        "https://www.amazon.com/*",
+        "https://www.amazon.ca/*",
+        "https://www.amazon.co.uk/*",
+        "https://www.amazon.in/*",
+        "https://www.amazon.de/*",
+        "https://www.amazon.it/*",
+        "https://www.amazon.es/*",
+        "https://www.amazon.fr/*"
+      ],
       "js": ["content_script.js"],
       "run_at": "document_idle"
     }
