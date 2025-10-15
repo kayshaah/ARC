@@ -2,7 +2,7 @@
   "name": "ARC V1.0 Test",
   "description": "Amazon Review Classification Extension - Gr7JKR",
   "version": "1.0",
-  "manifest_version": 1,
+  "manifest_version": 3,
   "action": {
     "default_popup": "hello.html",
     "default_icon": "hello_extensions.png"
