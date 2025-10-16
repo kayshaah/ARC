@@ -9,6 +9,20 @@
 // - flush batches on pagehide/hidden
 
 // --- ARC singleton guard (prevents double-injection/redeclaration) -----------
+
+// Wake the background and verify messaging works
+try {
+  chrome.runtime.sendMessage({ type: "ARC_PING" }, (resp) => {
+    if (chrome.runtime.lastError) {
+      console.warn("[ARC/cs] PING failed:", chrome.runtime.lastError.message);
+    } else {
+      console.log("[ARC/cs] PING ok:", resp);
+    }
+  });
+} catch (e) {
+  console.warn("[ARC/cs] PING exception:", e);
+}
+
 if (window.__ARC_CS_ACTIVE__) {
   throw new Error("ARC content script already active");
 }
@@ -59,8 +73,15 @@ function enqueueForUpload(obj) {
 function flushUpload() {
   if (!_arcBatch.length) return;
   const toSend = _arcBatch.splice(0, _arcBatch.length);
-  chrome.runtime.sendMessage({ type: "ARC_UPLOAD_BATCH", payload: toSend }, () => {});
+  chrome.runtime.sendMessage({ type: "ARC_UPLOAD_BATCH", payload: toSend }, (resp) => {
+    if (chrome.runtime.lastError) {
+      console.warn("[ARC/cs] upload sendMessage error:", chrome.runtime.lastError.message);
+      return;
+    }
+    console.log("[ARC/cs] upload resp:", resp);
+  });
 }
+
 
 // Flush when the page is going away (very important!)
 window.addEventListener('pagehide', flushUpload);
