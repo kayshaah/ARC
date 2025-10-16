@@ -639,4 +639,8 @@ function findReviewNodes(){
       scrollT = setTimeout(attachBadges, 150);
     }, { passive:true });
   }
+
+  const _ARC_BATCH_SIZE = 1;
+  const _ARC_DEBOUNCE_MS = 0;
+
 })();
