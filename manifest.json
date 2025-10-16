@@ -20,7 +20,9 @@
     "https://www.amazon.de/*",
     "https://www.amazon.it/*",
     "https://www.amazon.es/*",
-    "https://www.amazon.fr/*"
+    "https://www.amazon.fr/*",
+    "http://127.0.0.1:8001/*",     // ← dev FastAPI
+    "http://localhost:8001/*"      // ← dev FastAPI
   ],
 
   "background": {
