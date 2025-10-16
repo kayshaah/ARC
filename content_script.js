@@ -640,7 +640,7 @@ function findReviewNodes(){
     }, { passive:true });
   }
 
-  const _ARC_BATCH_SIZE = 1;
-  const _ARC_DEBOUNCE_MS = 0;
+  // const _ARC_BATCH_SIZE = 1;
+  // const _ARC_DEBOUNCE_MS = 0;
 
 })();
