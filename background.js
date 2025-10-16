@@ -42,4 +42,47 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
   })();
   return true; // keep channel open for async
+
+  // === ARC: backend upload proxy (background.js) ===============================
+const ARC_API_BASE = "http://127.0.0.1:8001"; // change for prod
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  (async () => {
+    if (!msg || typeof msg !== "object") return;
+
+    // Upload a batch of reviews for storage/training
+    if (msg.type === "ARC_UPLOAD_BATCH" && Array.isArray(msg.payload)) {
+      try {
+        const res = await fetch(`${ARC_API_BASE}/ingest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reviews: msg.payload })
+        });
+        const json = await res.json().catch(() => ({}));
+        sendResponse({ ok: res.ok, status: res.status, body: json });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e) });
+      }
+      return;
+    }
+
+    // Optionally: get model scores from backend
+    if (msg.type === "ARC_SCORE_BATCH" && Array.isArray(msg.payload)) {
+      try {
+        const res = await fetch(`${ARC_API_BASE}/score`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reviews: msg.payload })
+        });
+        const json = await res.json().catch(() => ({}));
+        sendResponse({ ok: res.ok, status: res.status, body: json });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e) });
+      }
+      return;
+    }
+  })();
+  return true; // keep port open
+});
+
 });
