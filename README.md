@@ -204,6 +204,12 @@ Use `review_key` to **upsert** (avoid duplicates) when you move to a DB.
 
 ---
 
+To run:
+python3 -m venv .venv
+source .venv/bin/activate
+pip install fastapi uvicorn
+uvicorn app:app --reload --port 8001
+
 ## Notes for Future Me
 
 - The user explicitly said: **“still haven’t switched to backend yet.”**  
