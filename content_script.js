@@ -1,12 +1,12 @@
 // ==== ARC content_script.js ===================================================
-// Single-file content script with:
 // - singleton guard (prevents double-injection)
-// - storage + popup toggle support
-// - badges with page-level tooltip (no clipping)
+// - badges + page-level tooltip
+// - broader selectors, lazy-load aware observer + scroll rescan
 // - reviewer profile fetch (absolute URLs, pagination, caching)
-// - AI-style score + reviewer spam likelihood + labels
+// - AI style score + reviewer spam likelihood + labels
 // - image attachments boost
-// - batched upload to background → FastAPI (/ingest)
+// - batched upload to background → FastAPI (/ingest) with dedupe
+// - flush batches on pagehide/hidden
 
 // --- ARC singleton guard (prevents double-injection/redeclaration) -----------
 if (window.__ARC_CS_ACTIVE__) {
@@ -15,18 +15,23 @@ if (window.__ARC_CS_ACTIVE__) {
 window.__ARC_CS_ACTIVE__ = true;
 
 // --- cache (per tab; reuse across re-injections) -----------------------------
-const _arcCache = window.__ARC_CACHE__ || (window.__ARC_CACHE__ = { reviewer: new Map() }); // authorHref -> {items, ts}
-function getCachedReviewer(authorHref){
-  const it = _arcCache.reviewer.get(authorHref);
+const _arcCache = window.__ARC_CACHE__ || (window.__ARC_CACHE__ = { reviewer: new Map() }); // authorHrefAbs -> {items, ts}
+function getCachedReviewer(authorHrefAbs){
+  const it = _arcCache.reviewer.get(authorHrefAbs);
   return it && (Date.now() - it.ts) < 15*60*1000 ? it.items : null; // 15 min TTL
 }
-function setCachedReviewer(authorHref, items){
-  _arcCache.reviewer.set(authorHref, { items, ts: Date.now() });
+function setCachedReviewer(authorHrefAbs, items){
+  _arcCache.reviewer.set(authorHrefAbs, { items, ts: Date.now() });
 }
 
 // --- batching to backend via background.js -----------------------------------
 const _arcBatch = [];
 let _arcBatchTimer = null;
+const _ARC_BATCH_SIZE = 10;   // flush sooner to avoid loss
+const _ARC_DEBOUNCE_MS = 400; // faster debounce
+
+// de-dup uploads by a review_key + stage ("base" | "enriched")
+const _sentKeys = new Set();
 
 function hashKey(s) {
   let h = 2166136261;
@@ -34,23 +39,34 @@ function hashKey(s) {
   return (h>>>0).toString(16);
 }
 
+function safeEnqueue(key, stage, record){
+  const k = `${key}:${stage}`;
+  if (_sentKeys.has(k)) return;
+  _sentKeys.add(k);
+  enqueueForUpload(record);
+}
+
 function enqueueForUpload(obj) {
   _arcBatch.push(obj);
-  if (_arcBatch.length >= 20) {
+  if (_arcBatch.length >= _ARC_BATCH_SIZE) {
     flushUpload();
   } else {
     clearTimeout(_arcBatchTimer);
-    _arcBatchTimer = setTimeout(flushUpload, 800); // debounce
+    _arcBatchTimer = setTimeout(flushUpload, _ARC_DEBOUNCE_MS);
   }
 }
 
 function flushUpload() {
   if (!_arcBatch.length) return;
   const toSend = _arcBatch.splice(0, _arcBatch.length);
-  chrome.runtime.sendMessage({ type: "ARC_UPLOAD_BATCH", payload: toSend }, () => {
-    // ignore response in MVP; add error handling if you like
-  });
+  chrome.runtime.sendMessage({ type: "ARC_UPLOAD_BATCH", payload: toSend }, () => {});
 }
+
+// Flush when the page is going away (very important!)
+window.addEventListener('pagehide', flushUpload);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushUpload();
+});
 
 // --- page-level tooltip portal (avoids clipping) -----------------------------
 let arcTooltip = null;
@@ -110,6 +126,12 @@ function reviewImageCount(node) {
   return imgs ? imgs.length : 0;
 }
 
+// expand truncated "read more" bodies
+function expandTruncatedIfAny(node){
+  const btn = node.querySelector('a[data-hook="review-body-read-more"], a.cr-expand-review, .a-expander-header a, .a-expander-prompt');
+  if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true, view:window }));
+}
+
 // Base trust score (toy heuristic)
 function baseScore({title, body, verified}){
   let score = 50;
@@ -160,7 +182,9 @@ async function fetchReviewerProfile(authorHref, want=10, maxPages=2){
       const html = await res.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
 
-      const blocks = doc.querySelectorAll('[data-hook="review"], .review, .profile-at-card, .a-section.review, .a-section.profile-at-review');
+      const blocks = doc.querySelectorAll(
+        '[data-hook="review"], .review, .profile-at-card, .a-section.review, .a-section.profile-at-review, .cr-widget-ReviewList [data-hook="review"]'
+      );
       for (const el of blocks){
         const t = el.querySelector('[data-hook="review-title"]')?.innerText?.trim()
               || el.querySelector('.review-title')?.innerText?.trim() || "";
@@ -365,7 +389,17 @@ function showTooltipNearBadge(badgeEl, data){
 
 // --- reviews wiring ----------------------------------------------------------
 function findReviewNodes(){
-  const sels = ['[data-hook="review"]', '.review', '.a-section.review'];
+  // cover product page + dedicated reviews page + profile layouts
+  const sels = [
+    '[data-hook="review"]',
+    '[data-hook="review-collapsed"]',
+    '[data-hook="review-card"]',
+    '.a-section.review', '.review',
+    '.profile-at-review', '.profile-at-card',
+    '.cr-widget-ReviewList [data-hook="review"]',
+    '#cm_cr-review_list [data-hook="review"]',
+    '#cm-cr-dp-review-list .review'
+  ];
   const nodes = [];
   sels.forEach(s => document.querySelectorAll(s).forEach(n => nodes.push(n)));
   return [...new Set(nodes)];
@@ -413,6 +447,7 @@ function findReviewNodes(){
     if (observer) { observer.disconnect(); observer = null; }
     hideTooltip();
     removeTooltipPortal();
+    flushUpload();
   }
 
   // enabled indicator dot
@@ -435,6 +470,8 @@ function findReviewNodes(){
     const reviews = findReviewNodes();
     reviews.forEach(node => {
       if (node.querySelector('.arc-badge-host')) return;
+
+      expandTruncatedIfAny(node);
 
       // extract bits
       const title = pick(node,'[data-hook="review-title"]')?.innerText?.trim()
@@ -516,7 +553,7 @@ function findReviewNodes(){
         reviewer_spam_score: null,
         reviewer_type_label: null
       };
-      enqueueForUpload(baseRecord);
+      safeEnqueue(review_key, 'base', baseRecord);
 
       function paintBadge(sc){
         const good = sc >= 60;
@@ -543,7 +580,7 @@ function findReviewNodes(){
           paintBadge(tooltipData.score);
 
           // upload enriched record (slow path)
-          enqueueForUpload({
+          safeEnqueue(review_key, 'enriched', {
             ...baseRecord,
             arc_score: tooltipData.score,
             reviewer_spam_score: spamScore,
@@ -562,8 +599,23 @@ function findReviewNodes(){
   }
 
   function observeForNewReviews(){
-    const container = document.querySelector('#reviewsMedley, #cm_cr-review_list, #reviews-container, body');
-    observer = new MutationObserver(() => setTimeout(attachBadges, 150));
-    observer.observe(container || document.body, { childList:true, subtree:true });
+    const container = document.querySelector('#reviewsMedley, #cm_cr-review_list, #cm-cr-dp-review-list, #reviews-container')
+                   || document.body;
+    observer = new MutationObserver((muts) => {
+      let shouldScan = false;
+      for (const m of muts) {
+        if (m.addedNodes && m.addedNodes.length) { shouldScan = true; break; }
+        if (m.type === 'childList') { shouldScan = true; break; }
+      }
+      if (shouldScan) setTimeout(attachBadges, 100);
+    });
+    observer.observe(container, { childList:true, subtree:true });
+
+    // also re-scan on scroll (Amazon lazy-loads)
+    let scrollT;
+    window.addEventListener('scroll', () => {
+      clearTimeout(scrollT);
+      scrollT = setTimeout(attachBadges, 150);
+    }, { passive:true });
   }
 })();
