@@ -8,40 +8,6 @@
 // - batched upload to background → FastAPI (/ingest) with dedupe
 // - flush batches on pagehide/hidden
 
-// --- global overwrite coordination (one reset per product) -------------------
-let __ARC_LAST_RESET_KEY__ = null;  // remembers which product we reset for (asin || url)
-
-function getPageASIN() {
-  const fromPath = (location.pathname.match(/\/dp\/([A-Z0-9]{10})/) || [])[1] || null;
-  const fromQS   = new URLSearchParams(location.search).get("asin");
-  return fromPath || fromQS || null;
-}
-
-function maybeSendGlobalReset() {
-  const asin = getPageASIN();
-  const key = asin || location.href; // fallback to URL if asin not present
-  if (__ARC_LAST_RESET_KEY__ === key) return;
-
-  __ARC_LAST_RESET_KEY__ = key;
-  chrome.runtime.sendMessage({ type: "ARC_RESET" }, (resp) => {
-    if (chrome.runtime.lastError) {
-      console.warn("[ARC/cs] reset sendMessage error:", chrome.runtime.lastError.message);
-      return;
-    }
-    console.log("[ARC/cs] reset resp:", resp);
-  });
-}
-
-// watch SPA-style URL changes (some Amazon pages do partial reloads)
-let __ARC_URL_WATCH_LAST__ = location.href;
-setInterval(() => {
-  if (location.href !== __ARC_URL_WATCH_LAST__) {
-    __ARC_URL_WATCH_LAST__ = location.href;
-    __ARC_LAST_RESET_KEY__ = null;   // allow a reset on the new page
-    maybeSendGlobalReset();
-  }
-}, 1000);
-
 
 // --- ARC singleton guard (prevents double-injection/redeclaration) -----------
 
@@ -72,6 +38,39 @@ function getCachedReviewer(authorHrefAbs){
 function setCachedReviewer(authorHrefAbs, items){
   _arcCache.reviewer.set(authorHrefAbs, { items, ts: Date.now() });
 }
+
+// === One reset per product, before we start ===
+let __ARC_PAGE_KEY__ = null;      // current product key (asin || pathname)
+let __ARC_RESET_DONE__ = false;   // did we already reset for this key?
+
+function getPageASIN() {
+  const m = location.pathname.match(/\/dp\/([A-Z0-9]{10})/);
+  const asin = m ? m[1] : new URLSearchParams(location.search).get("asin");
+  return asin || null;
+}
+function pageKey() {
+  // use ASIN when available, else fallback to path (not full URL to avoid query churn)
+  return getPageASIN() || new URL(location.href).pathname;
+}
+
+// Call once when the page (product) changes; waits for backend /reset to complete.
+function resetIfNewProductThen(cb) {
+  const key = pageKey();
+  if (key !== __ARC_PAGE_KEY__) {
+    __ARC_PAGE_KEY__ = key;
+    __ARC_RESET_DONE__ = false;
+  }
+  if (__ARC_RESET_DONE__) {
+    cb(); // already reset for this product
+    return;
+  }
+  chrome.runtime.sendMessage({ type: "ARC_RESET" }, (_resp) => {
+    // Even if reset fails, continue so UX isn't stuck
+    __ARC_RESET_DONE__ = true;
+    cb();
+  });
+}
+
 
 // --- batching to backend via background.js -----------------------------------
 const _arcBatch = [];
@@ -500,11 +499,13 @@ function findReviewNodes() {
   });
 
   function boot(){
-    maybeSendGlobalReset(); 
+  resetIfNewProductThen(() => {
     addEnabledDot();
     attachBadges();
     observeForNewReviews();
-  }
+  });
+}
+
   function teardown(){
     removeEnabledDot();
     document.querySelectorAll('.arc-badge-host').forEach(n => n.remove());
@@ -532,15 +533,10 @@ function findReviewNodes() {
   function attachBadges(){
   if (!arcEnabled) return;
   const reviews = findReviewNodes();
-
   reviews.forEach(node => {
-    // Skip if we’ve already processed this node (prevents duplicates)
     if (node.dataset.arcBadged === "1") return;
     node.dataset.arcBadged = "1";
-
-    // Also skip if it already contains a badge host (extra safeguard)
     if (node.querySelector('.arc-badge-host')) return;
-
 
       expandTruncatedIfAny(node);
 
