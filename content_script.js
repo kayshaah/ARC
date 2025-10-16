@@ -1,3 +1,45 @@
+// === GLOBAL TOOLTIP PORTAL (page-level, avoids clipping) ===
+let arcTooltip = null; // { host, sr, el }
+function getOrCreateTooltipPortal() {
+  if (arcTooltip && document.body.contains(arcTooltip.host)) return arcTooltip;
+  const host = document.createElement('div');
+  host.id = 'arc-tt-host';
+  Object.assign(host.style, {
+    position: 'fixed',
+    inset: '0',
+    zIndex: '2147483646',
+    pointerEvents: 'none' // let clicks pass through except the tooltip itself
+  });
+  const sr = host.attachShadow({ mode: 'open' });
+  sr.innerHTML = `
+    <style>
+      .tt {
+        position: fixed; /* IMPORTANT: relative to viewport */
+        min-width: 260px; max-width: 340px;
+        background: #fff; border: 1px solid #eaeaea; border-radius: 10px;
+        box-shadow: 0 12px 28px rgba(0,0,0,.18);
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+        font-size: 12px; color: #222;
+        pointer-events: auto; /* allow hover */
+      }
+      .hd { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #eee; }
+      .ct { padding: 10px; }
+      .rsn { color:#444; }
+      .rsn ul { margin:6px 0 0 16px; padding:0; }
+    </style>
+  `;
+  document.body.appendChild(host);
+  arcTooltip = { host, sr, el: null };
+  return arcTooltip;
+}
+
+function removeTooltipPortal() {
+  if (arcTooltip?.host) {
+    arcTooltip.host.remove();
+    arcTooltip = null;
+  }
+}
+
 (function () {
   let arcEnabled = true;
   let observer = null;
@@ -157,52 +199,108 @@
   }
 
   function buildTooltipHTML(data) {
-    const { score, reasons, history } = data;
-    const good = score >= 60;
-    const headerBg = good ? '#edf9f0' : '#fff0f0';
-    const headerText = good ? '#0a5a2b' : '#7a0000';
+  const { score, reasons, history } = data;
+  const good = score >= 60;
+  const headerBg = good ? '#edf9f0' : '#fff0f0';
+  const headerText = good ? '#0a5a2b' : '#7a0000';
 
-    const histHtml = history?.length
-      ? `<div style="margin-top:8px;">
-           <div style="font-weight:600; margin-bottom:4px;">Reviewer history (sample)</div>
-           <ul style="padding-left:16px; margin:0; max-height:120px; overflow:auto;">
-             ${history.map(h => {
-               const len = ((h.title||'') + ' ' + (h.body||'')).trim().length;
-               const tag = [
-                 typeof h.rating==='number' ? `${h.rating}★` : null,
-                 h.verified ? 'VP' : null,
-                 len>120 ? 'detailed' : (len<40 ? 'short' : null)
-               ].filter(Boolean).join(' · ');
-               const text = escapeHtml(((h.title||'') + ' — ' + (h.body||'')).slice(0,110));
-               return `<li style="margin-bottom:6px;">${tag ? `<b>${tag}:</b> ` : ''}${text}</li>`;
-             }).join('')}
-           </ul>
-         </div>`
-      : `<div style="margin-top:8px; color:#666; font-size:12px;">No prior reviews found.</div>`;
+  const histHtml = history?.length
+    ? `<div style="margin-top:8px;">
+         <div style="font-weight:600; margin-bottom:4px;">Reviewer history (sample)</div>
+         <ul style="padding-left:16px; margin:0; max-height:120px; overflow:auto;">
+           ${history.map(h => {
+             const len = ((h.title||'') + ' ' + (h.body||'')).trim().length;
+             const tag = [
+               typeof h.rating==='number' ? `${h.rating}★` : null,
+               h.verified ? 'VP' : null,
+               len>120 ? 'detailed' : (len<40 ? 'short' : null)
+             ].filter(Boolean).join(' · ');
+             const text = escapeHtml(((h.title||'') + ' — ' + (h.body||'')).slice(0,110));
+             return `<li style="margin-bottom:6px;">${tag ? `<b>${tag}:</b> ` : ''}${text}</li>`;
+           }).join('')}
+         </ul>
+       </div>`
+    : `<div style="margin-top:8px; color:#666; font-size:12px;">No prior reviews found.</div>`;
 
-    return `
-      <style>
-        .tt { position:absolute; right:6px; top:34px; min-width:260px; max-width:320px;
-              background:#fff; border:1px solid #eaeaea; border-radius:10px; box-shadow:0 12px 28px rgba(0,0,0,.18);
-              font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; font-size:12px; color:#222; z-index:99999; }
-        .hd { display:flex; align-items:center; justify-content:space-between; padding:8px 10px;
-              background:${headerBg}; color:${headerText}; border-bottom:1px solid #eee; }
-        .ct { padding:10px; }
-        .rsn { color:#444; }
-        .rsn ul { margin:6px 0 0 16px; padding:0; }
-      </style>
-      <div class="tt" role="tooltip">
-        <div class="hd"><div style="font-weight:700;">ARC score: ${score}%</div></div>
-        <div class="ct">
-          <div class="rsn"><b>Reasons</b>
-            <ul>${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
-          </div>
-          ${histHtml}
-          <div style="margin-top:8px; font-size:11px; color:#666;">ARC demo — heuristics + quick reviewer context.</div>
+  return `
+    <div class="tt" role="tooltip" style="background:${good ? '#fff' : '#fff'}">
+      <div class="hd" style="background:${headerBg}; color:${headerText};">
+        <div style="font-weight:700;">ARC score: ${score}%</div>
+      </div>
+      <div class="ct">
+        <div class="rsn"><b>Reasons</b>
+          <ul>${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
+        </div>
+        ${histHtml}
+        <div style="margin-top:8px; font-size:11px; color:#666;">
+          ARC demo — heuristics + quick reviewer context.
         </div>
       </div>
-    `;
+    </div>
+  `;
+}
+
+let openTooltip = null; // cleanup fn
+
+function showTooltipNearBadge(badgeEl, data) {
+  const portal = getOrCreateTooltipPortal();
+  // cleanup any existing
+  if (openTooltip) { openTooltip(); openTooltip = null; }
+
+  // build content
+  const wrap = document.createElement('div');
+  wrap.innerHTML = buildTooltipHTML(data);
+  const tip = wrap.firstElementChild;
+  portal.sr.appendChild(tip);
+
+  // position under the badge (with viewport bounds)
+  const rect = badgeEl.getBoundingClientRect();
+  const gap = 6;
+  const desiredTop = rect.bottom + gap;
+  const desiredLeft = Math.min(
+    Math.max(rect.right - 300, 8), // try align to right of badge
+    window.innerWidth - 12 - 260   // keep inside viewport
+  );
+  tip.style.top = `${Math.min(desiredTop, window.innerHeight - tip.offsetHeight - 12)}px`;
+  tip.style.left = `${desiredLeft}px`;
+
+  // keep open while hovering badge or tooltip
+  let hoverCount = 0;
+  function enter() { hoverCount++; }
+  function leave() {
+    hoverCount--;
+    setTimeout(() => {
+      if (hoverCount <= 0) close();
+    }, 120);
   }
+  tip.addEventListener('mouseenter', enter);
+  tip.addEventListener('mouseleave', leave);
+  badgeEl.addEventListener('mouseenter', enter);
+  badgeEl.addEventListener('mouseleave', leave);
+
+  // close on scroll or resize or ESC
+  const onScroll = () => close();
+  const onResize = () => close();
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onResize);
+  window.addEventListener('keydown', onKey);
+
+  function close() {
+    tip.remove();
+    window.removeEventListener('scroll', onScroll);
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('keydown', onKey);
+    openTooltip = null;
+  }
+
+  openTooltip = close;
+}
+
+function hideTooltip() {
+  if (openTooltip) { openTooltip(); openTooltip = null; }
+}
+
 
   function createTooltip(shadowRoot, data) {
     const wrap = document.createElement('div');
@@ -293,10 +391,11 @@
       function showTooltip() { if (!tooltipEl) tooltipEl = createTooltip(sr, tooltipData); }
       function hideTooltip() { if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; } }
 
-      badge.addEventListener('mouseenter', showTooltip);
+      // after you compute `tooltipData` and `paintBadge(...)`:
+      badge.addEventListener('mouseenter', () => showTooltipNearBadge(badge, tooltipData));
+      badge.addEventListener('focus',    () => showTooltipNearBadge(badge, tooltipData));
       badge.addEventListener('mouseleave', hideTooltip);
-      badge.addEventListener('focus', showTooltip);
-      badge.addEventListener('blur', hideTooltip);
+      badge.addEventListener('blur',       hideTooltip);
       window.addEventListener('scroll', hideTooltip, { passive:true });
     });
   }
@@ -306,4 +405,12 @@
     observer = new MutationObserver(() => setTimeout(attachBadges, 150));
     observer.observe(container || document.body, { childList:true, subtree:true });
   }
+
+  function teardown() {
+  removeEnabledDot?.();
+  document.querySelectorAll('.arc-badge-host').forEach(n => n.remove());
+  if (observer) { observer.disconnect(); observer = null; }
+  hideTooltip();
+  removeTooltipPortal();
+}
 })();
