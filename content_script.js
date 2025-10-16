@@ -8,6 +8,8 @@
 // - batched upload to background → FastAPI (/ingest) with dedupe
 // - flush batches on pagehide/hidden
 
+let __ARC_RESET_SENT_ASIN = null;
+
 // --- ARC singleton guard (prevents double-injection/redeclaration) -----------
 
 // Wake the background and verify messaging works
@@ -531,6 +533,11 @@ function findReviewNodes() {
       const productAsin = (location.pathname.match(/\/dp\/([A-Z0-9]{10})/) || [])[1]
         || (new URLSearchParams(location.search).get("asin") || null);
       const review_key = hashKey([author, title, body, productAsin || location.href].join("|"));
+
+      if (productAsin && __ARC_RESET_SENT_ASIN !== productAsin) {
+          __ARC_RESET_SENT_ASIN = productAsin;
+          chrome.runtime.sendMessage({ type: "ARC_RESET", asin: productAsin }, () => {});
+      }
 
       // host + badge (shadow)
       const host = document.createElement('div');
