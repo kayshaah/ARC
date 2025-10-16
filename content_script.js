@@ -6,10 +6,10 @@
 // - reviewer profile fetch (absolute URLs, pagination, caching)
 // - AI-style score + reviewer spam likelihood + labels
 // - image attachments boost
+// - batched upload to background → FastAPI (/ingest)
 
 // --- ARC singleton guard (prevents double-injection/redeclaration) -----------
 if (window.__ARC_CS_ACTIVE__) {
-  // Already loaded on this page; stop a second copy from running.
   throw new Error("ARC content script already active");
 }
 window.__ARC_CS_ACTIVE__ = true;
@@ -22,6 +22,34 @@ function getCachedReviewer(authorHref){
 }
 function setCachedReviewer(authorHref, items){
   _arcCache.reviewer.set(authorHref, { items, ts: Date.now() });
+}
+
+// --- batching to backend via background.js -----------------------------------
+const _arcBatch = [];
+let _arcBatchTimer = null;
+
+function hashKey(s) {
+  let h = 2166136261;
+  for (let i=0;i<s.length;i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h>>>0).toString(16);
+}
+
+function enqueueForUpload(obj) {
+  _arcBatch.push(obj);
+  if (_arcBatch.length >= 20) {
+    flushUpload();
+  } else {
+    clearTimeout(_arcBatchTimer);
+    _arcBatchTimer = setTimeout(flushUpload, 800); // debounce
+  }
+}
+
+function flushUpload() {
+  if (!_arcBatch.length) return;
+  const toSend = _arcBatch.splice(0, _arcBatch.length);
+  chrome.runtime.sendMessage({ type: "ARC_UPLOAD_BATCH", payload: toSend }, () => {
+    // ignore response in MVP; add error handling if you like
+  });
 }
 
 // --- page-level tooltip portal (avoids clipping) -----------------------------
@@ -307,7 +335,6 @@ function showTooltipNearBadge(badgeEl, data){
     window.innerWidth - 12 - 260
   );
 
-  // after appended, we can read offsetHeight
   tip.style.top = `${Math.min(desiredTop, window.innerHeight - tip.offsetHeight - 12)}px`;
   tip.style.left = `${desiredLeft}px`;
 
@@ -428,6 +455,11 @@ function findReviewNodes(){
       let score = baseScore({ title, body, verified });
       if (imgCount > 0) score = clamp01to100(score + Math.min(8, 3 + (imgCount - 1) * 2)); // image bonus
 
+      // create a stable key for backend upserts
+      const productAsin = (location.pathname.match(/\/dp\/([A-Z0-9]{10})/) || [])[1]
+        || (new URLSearchParams(location.search).get("asin") || null);
+      const review_key = hashKey([author, title, body, productAsin || location.href].join("|"));
+
       // host + badge (shadow)
       const host = document.createElement('div');
       host.className = 'arc-badge-host';
@@ -465,6 +497,27 @@ function findReviewNodes(){
         reviewerLabel: null
       };
 
+      // upload initial record (fast path)
+      const baseRecord = {
+        scrape_ts: new Date().toISOString(),
+        page_url: location.href,
+        product_asin: productAsin,
+        review_key,
+        review_title: title || null,
+        review_body: body || null,
+        review_rating: rating,
+        verified_purchase: !!verified,
+        images_count: imgCount,
+        reviewer_name: author || null,
+        reviewer_profile_url: authorHref || null,
+        arc_score: score,
+        ai_style_score: aiScore,
+        ai_style_label: aiLabel(aiScore),
+        reviewer_spam_score: null,
+        reviewer_type_label: null
+      };
+      enqueueForUpload(baseRecord);
+
       function paintBadge(sc){
         const good = sc >= 60;
         badge.style.background = good ? '#eef9f1' : '#fff1f1';
@@ -488,6 +541,14 @@ function findReviewNodes(){
             reviewerLabel: reviewerLabel(spamScore)
           };
           paintBadge(tooltipData.score);
+
+          // upload enriched record (slow path)
+          enqueueForUpload({
+            ...baseRecord,
+            arc_score: tooltipData.score,
+            reviewer_spam_score: spamScore,
+            reviewer_type_label: reviewerLabel(spamScore)
+          });
         }
       })();
 
