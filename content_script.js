@@ -409,8 +409,8 @@ function showTooltipNearBadge(badgeEl, data){
 }
 
 // --- reviews wiring ----------------------------------------------------------
-function findReviewNodes(){
-  // cover product page + dedicated reviews page + profile layouts
+function findReviewNodes() {
+  // broad scrape
   const sels = [
     '[data-hook="review"]',
     '[data-hook="review-collapsed"]',
@@ -421,9 +421,16 @@ function findReviewNodes(){
     '#cm_cr-review_list [data-hook="review"]',
     '#cm-cr-dp-review-list .review'
   ];
-  const nodes = [];
-  sels.forEach(s => document.querySelectorAll(s).forEach(n => nodes.push(n)));
-  return [...new Set(nodes)];
+  const all = [];
+  sels.forEach(s => document.querySelectorAll(s).forEach(n => all.push(n)));
+
+  // keep only top-most nodes (drop ones contained by another review node)
+  const uniq = [];
+  all.forEach(n => {
+    if (!all.some(other => other !== n && other.contains(n))) uniq.push(n);
+  });
+
+  return uniq;
 }
 
 (function () {
@@ -487,10 +494,17 @@ function findReviewNodes(){
   function removeEnabledDot(){ document.getElementById('arc-enabled-dot')?.remove(); }
 
   function attachBadges(){
-    if (!arcEnabled) return;
-    const reviews = findReviewNodes();
-    reviews.forEach(node => {
-      if (node.querySelector('.arc-badge-host')) return;
+  if (!arcEnabled) return;
+  const reviews = findReviewNodes();
+
+  reviews.forEach(node => {
+    // Skip if we’ve already processed this node (prevents duplicates)
+    if (node.dataset.arcBadged === "1") return;
+    node.dataset.arcBadged = "1";
+
+    // Also skip if it already contains a badge host (extra safeguard)
+    if (node.querySelector('.arc-badge-host')) return;
+
 
       expandTruncatedIfAny(node);
 
