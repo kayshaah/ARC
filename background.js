@@ -68,17 +68,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === "ARC_RESET") {
         try {
-          const url = new URL(`${ARC_API_BASE}/reset`);
-          if (msg.asin) url.searchParams.set("asin", msg.asin);
-          const res = await fetch(url, { method: "POST" });
+          const res = await fetch(`${ARC_API_BASE}/reset`, { method: "POST" });
           const text = await res.text();
           let body; try { body = JSON.parse(text); } catch { body = { raw: text }; }
+          console.log("[ARC/bg] reset result:", res.status, body);
           sendResponse({ ok: res.ok, status: res.status, body });
         } catch (e) {
+          console.error("[ARC/bg] reset error:", e);
           sendResponse({ ok: false, error: String(e) });
         }
         return;
-      }
+        }
 
       console.warn("[ARC/bg] unknown message:", msg);
       sendResponse({ ok: false, error: "Unknown message type" });
