@@ -1,109 +1,68 @@
-// ==== ARC content_script.js ===================================================
-// - singleton guard (prevents double-injection)
-// - badges + page-level tooltip
-// - broader selectors, lazy-load aware observer + scroll rescan
-// - reviewer profile fetch (absolute URLs, pagination, caching)
-// - AI style score + reviewer spam likelihood + labels
-// - image attachments boost
-// - batched upload to background → FastAPI (/ingest) with dedupe
-// - flush batches on pagehide/hidden
+// ==== ARC content_script.js (full) ==========================================
+// - One reset per product (session-scoped) before scraping
+// - Deduped review detection (top-most nodes only)
+// - Trust badge + hover tooltip (reasons + excerpt)
+// - Verified Purchase + image count extraction
+// - Batched uploads to background -> FastAPI /ingest
+// - Flush on pagehide/hidden
+// - No backend scoring here (can be added later via ARC_SCORE_BATCH)
 
-
-// --- ARC singleton guard (prevents double-injection/redeclaration) -----------
-
-// Wake the background and verify messaging works
+// --- PING background (diagnostics) ------------------------------------------
 try {
   chrome.runtime.sendMessage({ type: "ARC_PING" }, (resp) => {
-    if (chrome.runtime.lastError) {
-      console.warn("[ARC/cs] PING failed:", chrome.runtime.lastError.message);
-    } else {
-      console.log("[ARC/cs] PING ok:", resp);
-    }
+    if (chrome.runtime.lastError) console.warn("[ARC/cs] PING failed:", chrome.runtime.lastError.message);
+    else console.log("[ARC/cs] PING ok:", resp);
   });
-} catch (e) {
-  console.warn("[ARC/cs] PING exception:", e);
-}
+} catch (e) { console.warn("[ARC/cs] PING exception:", e); }
 
-if (window.__ARC_CS_ACTIVE__) {
-  throw new Error("ARC content script already active");
-}
+// --- singleton guard ---------------------------------------------------------
+if (window.__ARC_CS_ACTIVE__) throw new Error("ARC content script already active");
 window.__ARC_CS_ACTIVE__ = true;
 
-// --- cache (per tab; reuse across re-injections) -----------------------------
-const _arcCache = window.__ARC_CACHE__ || (window.__ARC_CACHE__ = { reviewer: new Map() }); // authorHrefAbs -> {items, ts}
-function getCachedReviewer(authorHrefAbs){
-  const it = _arcCache.reviewer.get(authorHrefAbs);
-  return it && (Date.now() - it.ts) < 15*60*1000 ? it.items : null; // 15 min TTL
-}
-function setCachedReviewer(authorHrefAbs, items){
-  _arcCache.reviewer.set(authorHrefAbs, { items, ts: Date.now() });
-}
-
-// === One reset per product, before we start ===
-let __ARC_PAGE_KEY__ = null;      // current product key (asin || pathname)
-let __ARC_RESET_DONE__ = false;   // did we already reset for this key?
-
+// === One reset per product (session-scoped) =================================
 function getPageASIN() {
   const m = location.pathname.match(/\/dp\/([A-Z0-9]{10})/);
-  const asin = m ? m[1] : new URLSearchParams(location.search).get("asin");
-  return asin || null;
+  return m ? m[1] : new URLSearchParams(location.search).get("asin");
 }
-function pageKey() {
-  // use ASIN when available, else fallback to path (not full URL to avoid query churn)
+function currentProductKey() {
+  // Stable key per product in THIS tab
   return getPageASIN() || new URL(location.href).pathname;
 }
-
-// Call once when the page (product) changes; waits for backend /reset to complete.
-function resetIfNewProductThen(cb) {
-  const key = pageKey();
-  if (key !== __ARC_PAGE_KEY__) {
-    __ARC_PAGE_KEY__ = key;
-    __ARC_RESET_DONE__ = false;
-  }
-  if (__ARC_RESET_DONE__) {
-    cb(); // already reset for this product
-    return;
-  }
-  chrome.runtime.sendMessage({ type: "ARC_RESET" }, (_resp) => {
-    // Even if reset fails, continue so UX isn't stuck
-    __ARC_RESET_DONE__ = true;
-    cb();
+function arcSend(type, payload = {}) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type, ...payload }, (resp) => resolve(resp || { ok: false }));
   });
 }
+async function ensureResetOnceForProduct() {
+  const key = currentProductKey();
+  const stampKey = "__ARC_RESET_DONE_FOR__";
+  const already = sessionStorage.getItem(stampKey);
+  if (already === key) {
+    console.log("[ARC/cs] reset already done for", key);
+    return;
+  }
+  console.log("[ARC/cs] sending reset for", key);
+  await arcSend("ARC_RESET");           // POST /reset (global truncate)
+  sessionStorage.setItem(stampKey, key);
+}
 
-
-// --- batching to backend via background.js -----------------------------------
+// === Batching to backend via background.js ==================================
 const _arcBatch = [];
 let _arcBatchTimer = null;
-const _ARC_BATCH_SIZE = 10;   // flush sooner to avoid loss
-const _ARC_DEBOUNCE_MS = 400; // faster debounce
+// choose 1 for immediate dev testing, or 10/400 for quieter prod-ish behavior
+const _ARC_BATCH_SIZE = 5;
+const _ARC_DEBOUNCE_MS = 250;
 
-// de-dup uploads by a review_key + stage ("base" | "enriched")
-const _sentKeys = new Set();
-
-function hashKey(s) {
-  let h = 2166136261;
-  for (let i=0;i<s.length;i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return (h>>>0).toString(16);
-}
-
-function safeEnqueue(key, stage, record){
-  const k = `${key}:${stage}`;
-  if (_sentKeys.has(k)) return;
-  _sentKeys.add(k);
-  enqueueForUpload(record);
-}
+const _sentKeys = new Set(); // dedupe: review_key:stage
 
 function enqueueForUpload(obj) {
   _arcBatch.push(obj);
-  if (_arcBatch.length >= _ARC_BATCH_SIZE) {
-    flushUpload();
-  } else {
+  if (_arcBatch.length >= _ARC_BATCH_SIZE) flushUpload();
+  else {
     clearTimeout(_arcBatchTimer);
     _arcBatchTimer = setTimeout(flushUpload, _ARC_DEBOUNCE_MS);
   }
 }
-
 function flushUpload() {
   if (!_arcBatch.length) return;
   const toSend = _arcBatch.splice(0, _arcBatch.length);
@@ -115,25 +74,23 @@ function flushUpload() {
     console.log("[ARC/cs] upload resp:", resp);
   });
 }
-
-
-// Flush when the page is going away (very important!)
+function safeEnqueue(key, stage, record){
+  const k = `${key}:${stage}`;
+  if (_sentKeys.has(k)) return;
+  _sentKeys.add(k);
+  enqueueForUpload(record);
+}
 window.addEventListener('pagehide', flushUpload);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushUpload();
 });
 
-// --- page-level tooltip portal (avoids clipping) -----------------------------
-let arcTooltip = null;
-let openTooltip = null; // cleanup fn
-
+// === Tooltip portal (page-level shadow root; no clipping) ===================
+let arcTooltip = null, openTooltip = null;
 function getOrCreateTooltipPortal(){
   if (arcTooltip && document.body.contains(arcTooltip.host)) return arcTooltip;
   const host = document.createElement('div');
-  host.id = 'arc-tt-host';
-  Object.assign(host.style, {
-    position:'fixed', inset:'0', zIndex:'2147483646', pointerEvents:'none'
-  });
+  Object.assign(host.style,{ position:'fixed', inset:'0', zIndex:'2147483646', pointerEvents:'none' });
   const sr = host.attachShadow({ mode:'open' });
   sr.innerHTML = `<style>
     .tt{position:fixed;min-width:260px;max-width:340px;background:#fff;border:1px solid #eaeaea;border-radius:10px;
@@ -149,223 +106,11 @@ function getOrCreateTooltipPortal(){
 function hideTooltip(){ if (openTooltip) { openTooltip(); openTooltip = null; } }
 function removeTooltipPortal(){ if (arcTooltip?.host) { arcTooltip.host.remove(); arcTooltip = null; } }
 
-// --- helpers -----------------------------------------------------------------
-function escapeHtml(s){ return s ? s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : ""; }
-function pick(el, sel){ return el.querySelector(sel); }
-function clamp01to100(x){ return Math.max(0, Math.min(100, Math.round(x))); }
-
-function makeAbsoluteUrl(href) {
-  try { return href ? new URL(href, location.origin).toString() : null; } catch { return null; }
-}
-function absolutizeAmazon(nextHref, baseUrl) {
-  try {
-    const base = new URL(baseUrl || location.href);
-    return new URL(nextHref, `${base.protocol}//${base.host}`).toString();
-  } catch { return null; }
-}
-
-// Verified Purchase detector
-function isVerifiedPurchase(reviewNode){
-  const badge = reviewNode.querySelector('[data-hook="avp-badge"]');
-  if (badge && /verified\s*purchase/i.test(badge.textContent || '')) return true;
-  for (const el of reviewNode.querySelectorAll('span,div')) {
-    const t = (el.textContent || '').trim();
-    if (t && /(^|\s)verified\s*purchase(\s|$)/i.test(t)) return true;
-  }
-  return false;
-}
-
-// Image count in a review (for score bonus)
-function reviewImageCount(node) {
-  const imgs = node.querySelectorAll('[data-hook="review-image-tile"] img, .review-image-tile img, [data-hook="review-image"] img, img.review-image-tile');
-  return imgs ? imgs.length : 0;
-}
-
-// expand truncated "read more" bodies
-function expandTruncatedIfAny(node){
-  const btn = node.querySelector('a[data-hook="review-body-read-more"], a.cr-expand-review, .a-expander-header a, .a-expander-prompt');
-  if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true, view:window }));
-}
-
-// Base trust score (toy heuristic)
-function baseScore({title, body, verified}){
-  let score = 50;
-  const txt = (title || "") + " " + (body || "");
-  const len = txt.trim().length;
-  if (verified) score += 20;
-  if (len < 40) score -= 20; else if (len < 120) score -= 5; else score += 5;
-  const lower = txt.toLowerCase();
-  ["amazing product","highly recommend","best purchase","works great"].forEach(p => { if (lower.includes(p)) score -= 5; });
-  return clamp01to100(score);
-}
-
-// On-page same-author history (fast, same product page)
-function sameAuthorPageHistory(authorName, currentNode){
-  if (!authorName) return [];
-  const nodes = findReviewNodes();
-  const matches = [];
-  nodes.forEach(n => {
-    if (n === currentNode) return;
-    const aName = n.querySelector('.a-profile-name')?.innerText?.trim();
-    if (aName && aName === authorName) {
-      const t = n.querySelector('[data-hook="review-title"]')?.innerText?.trim()
-            || n.querySelector('.review-title')?.innerText?.trim() || "";
-      const b = n.querySelector('[data-hook="review-body"]')?.innerText?.trim()
-            || n.querySelector('.review-text-content')?.innerText?.trim() || "";
-      const rText = n.querySelector('[data-hook="review-star-rating"]')?.innerText
-            || n.querySelector('.a-icon-alt')?.innerText || "";
-      const rating = rText ? parseFloat(rText.split(" ")[0]) : null;
-      const vp = isVerifiedPurchase(n);
-      matches.push({ title:t, body:b, rating, verified:vp });
-    }
-  });
-  return matches;
-}
-
-// Reviewer profile fetch (pagination + caching)
-async function fetchReviewerProfile(authorHref, want=10, maxPages=2){
-  try{
-    let url = makeAbsoluteUrl(authorHref);
-    if (!url) return [];
-    const cached = getCachedReviewer(url);
-    if (cached) return cached.slice(0, want);
-
-    const all = [];
-    for (let page=0; page<maxPages && all.length<want; page++){
-      const res = await fetch(url, { credentials:'include' });
-      if (!res.ok) break;
-      const html = await res.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-
-      const blocks = doc.querySelectorAll(
-        '[data-hook="review"], .review, .profile-at-card, .a-section.review, .a-section.profile-at-review, .cr-widget-ReviewList [data-hook="review"]'
-      );
-      for (const el of blocks){
-        const t = el.querySelector('[data-hook="review-title"]')?.innerText?.trim()
-              || el.querySelector('.review-title')?.innerText?.trim() || "";
-        const b = el.querySelector('[data-hook="review-body"]')?.innerText?.trim()
-              || el.querySelector('.review-text-content')?.innerText?.trim() || "";
-        const rText = el.querySelector('[data-hook="review-star-rating"]')?.innerText
-              || el.querySelector('.a-icon-alt')?.innerText || "";
-        const rating = rText ? parseFloat(rText.split(' ')[0]) : null;
-
-        let vp = false;
-        const badge = el.querySelector('[data-hook="avp-badge"]');
-        if (badge && /verified\s*purchase/i.test(badge.textContent||'')) vp = true;
-        else {
-          for (const s of el.querySelectorAll('span,div')){
-            const tx=(s.textContent||'').trim();
-            if (tx && /(^|\s)verified\s*purchase(\s|$)/i.test(tx)){ vp = true; break; }
-          }
-        }
-
-        if (t || b) all.push({ title:t, body:b, rating, verified:vp });
-        if (all.length >= want) break;
-      }
-
-      const next = doc.querySelector('li.a-last a, a[href*="pageNumber="], a[href*="pageNumber%3D"]');
-      if (!next) break;
-      const nextHref = next.getAttribute('href'); if(!nextHref) break;
-      const abs = absolutizeAmazon(nextHref, url); if (!abs) break;
-      url = abs;
-
-      await new Promise(r => setTimeout(r, 400)); // polite delay
-    }
-
-    setCachedReviewer(makeAbsoluteUrl(authorHref), all);
-    return all;
-  } catch { return []; }
-}
-
-// History-based score nudges
-function applyHistoryNudges(score, history){
-  if (!history?.length) return score;
-  const withRatings = history.filter(h => typeof h.rating === 'number');
-  const avg = withRatings.length ? (withRatings.reduce((a,c)=>a+(c.rating||0),0)/withRatings.length) : null;
-  const verifiedCount = history.filter(h => h.verified).length;
-  const longCount = history.filter(h => ((h.title||'').length + (h.body||'').length) > 120).length;
-  const allFive = withRatings.length >= 3 && withRatings.every(h => h.rating >= 4.5);
-  if (avg && avg >= 3.5 && verifiedCount >= 1) score += 3;
-  if (longCount >= 2) score += 2;
-  if (allFive && verifiedCount === 0) score -= 4;
-  return clamp01to100(score);
-}
-
-// AI-style score (heuristic; higher ≈ more AI-like)
-function aiStyleScore(text){
-  const t=(text||"").trim(); if (t.length<40) return 20;
-  const sents=t.split(/[.!?]+/).map(s=>s.trim()).filter(Boolean);
-  const lens=sents.map(s=>s.split(/\s+/).length); const avg=lens.reduce((a,c)=>a+c,0)/(lens.length||1);
-  const std=Math.sqrt((lens.reduce((a,c)=>a+Math.pow(c-avg,2),0)/(lens.length||1))||0);
-  const words=(t.match(/\b\w+\b/g)||[]).length; const uniq=new Set((t.toLowerCase().match(/[a-z]+/g)||[])).size;
-  const ttr=words?uniq/words:0; const punct=(t.match(/[,:;()-]/g)||[]).length/(t.length||1);
-  const fancy=(t.match(/[\u{1F300}-\u{1FAFF}�•—–“”‘’]/gu)||[]).length;
-  let s=0; if(avg>=14)s+=15; if(std<=4)s+=25; if(ttr<=0.42)s+=20; if(punct>=0.02)s+=10; if(fancy===0)s+=10;
-  if(/in summary|overall,|furthermore|moreover|in conclusion/i.test(t)) s+=10;
-  if(/i received this product for free|honest review/i.test(t)) s+=10;
-  return clamp01to100(s);
-}
-function aiLabel(aiScore) {
-  if (aiScore >= 70) return "AI-like";
-  if (aiScore <= 35) return "Human-like";
-  return "Unclear";
-}
-
-// Reviewer spam likelihood (higher ≈ more suspicious)
-function reviewerSpamLikelihood(history){
-  if(!history?.length) return 50;
-  const n=history.length;
-  const ratings=history.filter(h=>typeof h.rating==='number').map(h=>h.rating);
-  const avgRating=ratings.length?ratings.reduce((a,c)=>a+c,0)/ratings.length:null;
-  const allFive=ratings.length>=3 && ratings.every(r=>r>=4.5);
-  const allOne =ratings.length>=3 && ratings.every(r=>r<=1.5);
-  const verifiedFrac=history.filter(h=>h.verified).length/n;
-  const lengths=history.map(h=>((h.title||'').length+(h.body||'').length));
-  const avgLen=lengths.reduce((a,c)=>a+c,0)/n;
-  const phrases=["amazing product","highly recommend","best purchase","works great","great value","5 stars"];
-  let dupHits=0; history.forEach(h=>{ const lower=((h.title||'')+' '+(h.body||'')).toLowerCase(); phrases.forEach(p=>{ if(lower.includes(p)) dupHits++; }); });
-  const dupRate=dupHits/Math.max(1,n);
-
-  let spam=30;
-  if(allFive||allOne) spam+=20;
-  if(verifiedFrac<0.2 && n>=3) spam+=20;
-  if(avgLen<80) spam+=10;
-  if(dupRate>0.6) spam+=15;
-  if(avgRating!==null && (avgRating>=4.7 || avgRating<=1.3)) spam+=10;
-
-  return clamp01to100(spam);
-}
-function reviewerLabel(spamScore) {
-  if (spamScore >= 70) return "Spam-leaning / Paid-like";
-  if (spamScore <= 35) return "Organic-leaning";
-  return "Unclear";
-}
-
-// --- tooltip render ----------------------------------------------------------
 function buildTooltipHTML(data){
-  const { score, reasons, history, aiScore, aiLabel:aiLbl, spamScore, reviewerLabel:revLbl } = data;
+  const { score, reasons, excerpt } = data;
   const good = score >= 60;
   const headerBg = good ? '#edf9f0' : '#fff0f0';
   const headerText = good ? '#0a5a2b' : '#7a0000';
-
-  const histHtml = history?.length
-    ? `<div style="margin-top:8px;">
-         <div style="font-weight:600; margin-bottom:4px;">Reviewer history (sample)</div>
-         <ul style="padding-left:16px; margin:0; max-height:120px; overflow:auto;">
-           ${history.map(h => {
-             const len = ((h.title||'') + ' ' + (h.body||'')).trim().length;
-             const tag = [
-               typeof h.rating==='number' ? `${h.rating}★` : null,
-               h.verified ? 'VP' : null,
-               len>120 ? 'detailed' : (len<40 ? 'short' : null)
-             ].filter(Boolean).join(' · ');
-             const text = escapeHtml(((h.title||'') + ' — ' + (h.body||'')).slice(0,110));
-             return `<li style="margin-bottom:6px;">${tag ? `<b>${tag}:</b> ` : ''}${text}</li>`;
-           }).join('')}
-         </ul>
-       </div>`
-    : `<div style="margin-top:8px; color:#666; font-size:12px;">No prior reviews found.</div>`;
-
   return `
     <div class="tt" role="tooltip">
       <div class="hd" style="background:${headerBg}; color:${headerText};">
@@ -375,48 +120,31 @@ function buildTooltipHTML(data){
         <div class="rsn"><b>Reasons</b>
           <ul>${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
         </div>
-
-        <div class="rsn" style="margin-top:8px;">
-          <b>AI style:</b> ${escapeHtml(aiLbl || '')} (${aiScore}/100)
-          <span style="color:#666; font-size:11px;">(heuristic)</span>
-        </div>
-
-        ${typeof spamScore === 'number' ? `
-          <div class="rsn" style="margin-top:6px;">
-            <b>Reviewer type:</b> ${escapeHtml(revLbl || '')} (${spamScore}/100)
-            <span style="color:#666; font-size:11px;">(behavioral)</span>
-          </div>` : ''}
-
-        ${histHtml}
-
+        ${excerpt ? `
+        <div style="margin-top:8px;"><b>Excerpt</b>
+          <div style="padding:8px;background:#f7f7f7;border-radius:8px;max-height:120px;overflow:auto;">
+            ${escapeHtml(excerpt)}
+          </div>
+        </div>` : ``}
         <div style="margin-top:8px; font-size:11px; color:#666;">
-          ARC demo — heuristics + quick reviewer context.
+          ARC demo — heuristics + context. (Model scoring can replace this.)
         </div>
       </div>
     </div>
   `;
 }
-
 function showTooltipNearBadge(badgeEl, data){
   const portal = getOrCreateTooltipPortal();
   if (openTooltip) { openTooltip(); openTooltip = null; }
-
   const wrap = document.createElement('div');
   wrap.innerHTML = buildTooltipHTML(data);
   const tip = wrap.firstElementChild;
   portal.sr.appendChild(tip);
-
-  const rect = badgeEl.getBoundingClientRect();
-  const gap = 6;
+  const rect = badgeEl.getBoundingClientRect(), gap = 6;
   const desiredTop = rect.bottom + gap;
-  const desiredLeft = Math.min(
-    Math.max(rect.right - 300, 8),
-    window.innerWidth - 12 - 260
-  );
-
+  const desiredLeft = Math.min(Math.max(rect.right - 300, 8), window.innerWidth - 12 - 260);
   tip.style.top = `${Math.min(desiredTop, window.innerHeight - tip.offsetHeight - 12)}px`;
   tip.style.left = `${desiredLeft}px`;
-
   let hoverCount = 0;
   const enter = () => { hoverCount++; };
   const leave = () => { hoverCount--; setTimeout(() => { if (hoverCount <= 0) close(); }, 120); };
@@ -424,14 +152,10 @@ function showTooltipNearBadge(badgeEl, data){
   tip.addEventListener('mouseleave', leave);
   badgeEl.addEventListener('mouseenter', enter);
   badgeEl.addEventListener('mouseleave', leave);
-
-  const onScroll = () => close();
-  const onResize = () => close();
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const onScroll = () => close(), onResize = () => close(), onKey = (e) => { if (e.key === 'Escape') close(); };
   window.addEventListener('scroll', onScroll, { passive:true });
   window.addEventListener('resize', onResize);
   window.addEventListener('keydown', onKey);
-
   function close(){
     tip.remove();
     window.removeEventListener('scroll', onScroll);
@@ -442,37 +166,63 @@ function showTooltipNearBadge(badgeEl, data){
   openTooltip = close;
 }
 
-// --- reviews wiring ----------------------------------------------------------
-function findReviewNodes() {
-  // broad scrape
+// === Helpers =================================================================
+function escapeHtml(s){ return s ? s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : ""; }
+function pick(el, sel){ return el.querySelector(sel); }
+function clamp01to100(x){ return Math.max(0, Math.min(100, Math.round(x))); }
+function hashKey(s){ let h=2166136261; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return (h>>>0).toString(16); }
+
+function isVerifiedPurchase(reviewNode){
+  const badge = reviewNode.querySelector('[data-hook="avp-badge"]');
+  if (badge && /verified\s*purchase/i.test(badge.textContent || '')) return true;
+  for (const el of reviewNode.querySelectorAll('span,div')) {
+    const t = (el.textContent || '').trim();
+    if (t && /(^|\s)verified\s*purchase(\s|$)/i.test(t)) return true;
+  }
+  return false;
+}
+function reviewImageCount(node) {
+  const imgs = node.querySelectorAll('[data-hook="review-image-tile"] img, .review-image-tile img, [data-hook="review-image"] img, img.review-image-tile');
+  return imgs ? imgs.length : 0;
+}
+function expandTruncatedIfAny(node){
+  const btn = node.querySelector('a[data-hook="review-body-read-more"], a.cr-expand-review, .a-expander-header a, .a-expander-prompt');
+  if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true, view:window }));
+}
+
+// tiny heuristic score — replace with backend model when ready
+function baseScore({title, body, verified, imgCount}){
+  let score = 50;
+  const txt = (title||"") + " " + (body||"");
+  const len = txt.trim().length;
+  if (verified) score += 20;
+  if (imgCount > 0) score += Math.min(8, 3 + Math.max(0, imgCount-1)*2);
+  if (len < 40) score -= 20; else if (len < 120) score -= 5; else score += 5;
+  const lower = txt.toLowerCase();
+  ["amazing product","highly recommend","best purchase","works great"].forEach(p => { if (lower.includes(p)) score -= 5; });
+  return clamp01to100(score);
+}
+
+// === Review discovery (top-most only) =======================================
+function findReviewNodes(){
   const sels = [
-    '[data-hook="review"]',
-    '[data-hook="review-collapsed"]',
-    '[data-hook="review-card"]',
-    '.a-section.review', '.review',
-    '.profile-at-review', '.profile-at-card',
-    '.cr-widget-ReviewList [data-hook="review"]',
-    '#cm_cr-review_list [data-hook="review"]',
+    '[data-hook="review"]','[data-hook="review-collapsed"]','[data-hook="review-card"]',
+    '.a-section.review','.review','.profile-at-review','.profile-at-card',
+    '.cr-widget-ReviewList [data-hook="review"]','#cm_cr-review_list [data-hook="review"]',
     '#cm-cr-dp-review-list .review'
   ];
-  const all = [];
-  sels.forEach(s => document.querySelectorAll(s).forEach(n => all.push(n)));
-
-  // keep only top-most nodes (drop ones contained by another review node)
-  const uniq = [];
-  all.forEach(n => {
-    if (!all.some(other => other !== n && other.contains(n))) uniq.push(n);
-  });
-
+  const all=[]; sels.forEach(s => document.querySelectorAll(s).forEach(n => all.push(n)));
+  const uniq=[]; all.forEach(n => { if (!all.some(o => o !== n && o.contains(n))) uniq.push(n); });
   return uniq;
 }
 
-(function () {
+// === Core lifecycle ==========================================================
+(function(){
   let arcEnabled = true;
   let observer = null;
 
-  // popup messaging
-  chrome.runtime?.onMessage?.addListener?.((msg, _sender, sendResponse) => {
+  // popup toggle sync
+  chrome.runtime?.onMessage?.addListener?.((msg,_sender,sendResponse)=>{
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'ARC_TOGGLE') {
       arcEnabled = !!msg.enabled;
@@ -483,29 +233,17 @@ function findReviewNodes() {
     }
     return true;
   });
-
-  // mirror storage
   chrome.storage?.local?.get?.({ arcEnabled:true }, (res) => {
     arcEnabled = !!res.arcEnabled;
     if (arcEnabled) boot();
   });
-  chrome.storage?.onChanged?.addListener?.((changes) => {
-    if ('arcEnabled' in changes) {
-      arcEnabled = !!changes.arcEnabled.newValue;
-      const hasBadges = document.querySelector('.arc-badge-host');
-      if (arcEnabled && !hasBadges) boot();
-      if (!arcEnabled) teardown();
-    }
-  });
 
-  function boot(){
-  resetIfNewProductThen(() => {
+  async function boot(){
+    await ensureResetOnceForProduct();  // <- single reset, then scrape
     addEnabledDot();
     attachBadges();
     observeForNewReviews();
-  });
-}
-
+  }
   function teardown(){
     removeEnabledDot();
     document.querySelectorAll('.arc-badge-host').forEach(n => n.remove());
@@ -515,7 +253,7 @@ function findReviewNodes() {
     flushUpload();
   }
 
-  // enabled indicator dot
+  // enabled indicator
   function addEnabledDot(){
     if (document.getElementById('arc-enabled-dot')) return;
     const dot = document.createElement('div');
@@ -531,16 +269,16 @@ function findReviewNodes() {
   function removeEnabledDot(){ document.getElementById('arc-enabled-dot')?.remove(); }
 
   function attachBadges(){
-  if (!arcEnabled) return;
-  const reviews = findReviewNodes();
-  reviews.forEach(node => {
-    if (node.dataset.arcBadged === "1") return;
-    node.dataset.arcBadged = "1";
-    if (node.querySelector('.arc-badge-host')) return;
+    if (!arcEnabled) return;
+    const reviews = findReviewNodes();
+    reviews.forEach(node => {
+      if (node.dataset.arcBadged === "1") return; // prevent duplicates
+      node.dataset.arcBadged = "1";
+      if (node.querySelector('.arc-badge-host')) return;
 
       expandTruncatedIfAny(node);
 
-      // extract bits
+      // extract review bits
       const title = pick(node,'[data-hook="review-title"]')?.innerText?.trim()
                  || pick(node,'.review-title')?.innerText?.trim() || "";
       const body  = pick(node,'[data-hook="review-body"]')?.innerText?.trim()
@@ -549,68 +287,59 @@ function findReviewNodes() {
                        || pick(node,'.a-icon-alt')?.innerText || "";
       const rating = ratingText ? parseFloat(ratingText.split(' ')[0]) : null;
       const verified = isVerifiedPurchase(node);
-      const author = pick(node,'.a-profile-name')?.innerText?.trim() || "Unknown";
-      const authorHref = makeAbsoluteUrl(pick(node,'.a-profile')?.getAttribute('href'));
       const imgCount = reviewImageCount(node);
+      const author   = pick(node,'.a-profile-name')?.innerText?.trim() || "Unknown";
+      const authorHref = pick(node,'.a-profile')?.getAttribute('href') || null;
 
-      // compute scores
-      const fullText = `${title} ${body}`.trim();
-      const aiScore = aiStyleScore(fullText);
-      let score = baseScore({ title, body, verified });
-      if (imgCount > 0) score = clamp01to100(score + Math.min(8, 3 + (imgCount - 1) * 2)); // image bonus
+      // product ASIN + stable key
+      const asin = getPageASIN();
+      const review_key = hashKey([author, title, body, asin || location.href].join("|"));
 
-      // create a stable key for backend upserts
-      const productAsin = (location.pathname.match(/\/dp\/([A-Z0-9]{10})/) || [])[1]
-        || (new URLSearchParams(location.search).get("asin") || null);
-      const review_key = hashKey([author, title, body, productAsin || location.href].join("|"));
+      // compute score (placeholder heuristic; swap to backend when ready)
+      const score = baseScore({ title, body, verified, imgCount });
 
-      if (productAsin && __ARC_RESET_SENT_ASIN !== productAsin) {
-          __ARC_RESET_SENT_ASIN = productAsin;
-          chrome.runtime.sendMessage({ type: "ARC_RESET", asin: productAsin }, () => {});
-      }
-
-      // host + badge (shadow)
+      // create badge
       const host = document.createElement('div');
       host.className = 'arc-badge-host';
       host.style.position = 'relative';
-      node.style.position = node.style.position || 'relative';
       node.prepend(host);
-
       const sr = host.attachShadow({ mode:'open' });
-      sr.innerHTML = `
-        <style>
-          .badge {
-            position:absolute; top:6px; right:6px; padding:6px 8px; border-radius:8px;
-            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
-            font-weight:700; font-size:12px; cursor:pointer; user-select:none;
-            box-shadow:0 4px 14px rgba(0,0,0,.12); transition: transform .12s ease;
-          }
-          .badge:hover { transform: translateY(-1px); }
-        </style>
-        <div class="badge">…</div>
-      `;
+      sr.innerHTML = `<style>
+         .badge{position:absolute; top:6px; right:6px; padding:6px 8px; border-radius:8px;
+                font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+                font-weight:700; font-size:12px; cursor:pointer; user-select:none;
+                box-shadow:0 4px 14px rgba(0,0,0,.12); transition: transform .12s ease;}
+         .badge:hover{ transform: translateY(-1px); }
+      </style>
+      <div class="badge">${score}%</div>`;
       const badge = sr.querySelector('.badge');
 
-      // initial tooltip data
-      let tooltipData = {
-        score,
-        aiScore,
-        aiLabel: aiLabel(aiScore),
-        reasons: [
-          verified ? 'Verified purchase' : 'Unverified',
-          ((title+body).length < 40) ? 'Very short' : ((title+body).length < 120) ? 'Short' : 'Detailed',
-          ...(imgCount > 0 ? [`${imgCount} image${imgCount>1?'s':''} attached`] : [])
-        ],
-        history: sameAuthorPageHistory(author, node),
-        spamScore: null,
-        reviewerLabel: null
-      };
+      // color
+      const good = score >= 60;
+      badge.style.background = good ? '#eef9f1' : '#fff1f1';
+      badge.style.color = good ? '#0a5a2b' : '#7a0000';
 
-      // upload initial record (fast path)
+      // tooltip data
+      const reasons = [
+        verified ? 'Verified purchase' : 'Unverified',
+        (title + body).length < 40 ? 'Very short' : ( (title + body).length < 120 ? 'Short' : 'Detailed'),
+        ...(imgCount > 0 ? [`${imgCount} image${imgCount>1?'s':''} attached`] : [])
+      ];
+      const excerpt = ((title ? title + " — " : "") + body).slice(0, 800);
+      const tipData = { score, reasons, excerpt };
+
+      // tooltip events
+      badge.addEventListener('mouseenter', () => showTooltipNearBadge(badge, tipData));
+      badge.addEventListener('focus',    () => showTooltipNearBadge(badge, tipData));
+      badge.addEventListener('mouseleave', hideTooltip);
+      badge.addEventListener('blur',       hideTooltip);
+      window.addEventListener('scroll', hideTooltip, { passive:true });
+
+      // upload (base)
       const baseRecord = {
         scrape_ts: new Date().toISOString(),
         page_url: location.href,
-        product_asin: productAsin,
+        product_asin: asin,
         review_key,
         review_title: title || null,
         review_body: body || null,
@@ -619,79 +348,21 @@ function findReviewNodes() {
         images_count: imgCount,
         reviewer_name: author || null,
         reviewer_profile_url: authorHref || null,
-        arc_score: score,
-        ai_style_score: aiScore,
-        ai_style_label: aiLabel(aiScore),
-        reviewer_spam_score: null,
-        reviewer_type_label: null
+        arc_score: score
       };
       safeEnqueue(review_key, 'base', baseRecord);
-
-      function paintBadge(sc){
-        const good = sc >= 60;
-        badge.style.background = good ? '#eef9f1' : '#fff1f1';
-        badge.style.color = good ? '#0a5a2b' : '#7a0000';
-        badge.textContent = `${sc}%`;
-      }
-      paintBadge(score);
-
-      // async fetch reviewer profile & refine
-      (async () => {
-        const prof = await fetchReviewerProfile(authorHref, 10, 2);
-        if (prof.length) {
-          const allHistory = [...tooltipData.history, ...prof];
-          const spamScore = reviewerSpamLikelihood(allHistory);
-          const refined = applyHistoryNudges(score, allHistory) - Math.round((spamScore - 50)/10);
-          tooltipData = {
-            ...tooltipData,
-            score: clamp01to100(refined),
-            history: allHistory,
-            spamScore,
-            reviewerLabel: reviewerLabel(spamScore)
-          };
-          paintBadge(tooltipData.score);
-
-          // upload enriched record (slow path)
-          safeEnqueue(review_key, 'enriched', {
-            ...baseRecord,
-            arc_score: tooltipData.score,
-            reviewer_spam_score: spamScore,
-            reviewer_type_label: reviewerLabel(spamScore)
-          });
-        }
-      })();
-
-      // tooltip events
-      badge.addEventListener('mouseenter', () => showTooltipNearBadge(badge, tooltipData));
-      badge.addEventListener('focus',    () => showTooltipNearBadge(badge, tooltipData));
-      badge.addEventListener('mouseleave', hideTooltip);
-      badge.addEventListener('blur',       hideTooltip);
-      window.addEventListener('scroll', hideTooltip, { passive:true });
     });
   }
 
   function observeForNewReviews(){
     const container = document.querySelector('#reviewsMedley, #cm_cr-review_list, #cm-cr-dp-review-list, #reviews-container')
                    || document.body;
-    observer = new MutationObserver((muts) => {
-      let shouldScan = false;
-      for (const m of muts) {
-        if (m.addedNodes && m.addedNodes.length) { shouldScan = true; break; }
-        if (m.type === 'childList') { shouldScan = true; break; }
-      }
-      if (shouldScan) setTimeout(attachBadges, 100);
-    });
+    observer = new MutationObserver(() => setTimeout(attachBadges, 100));
     observer.observe(container, { childList:true, subtree:true });
-
-    // also re-scan on scroll (Amazon lazy-loads)
     let scrollT;
     window.addEventListener('scroll', () => {
       clearTimeout(scrollT);
-      scrollT = setTimeout(attachBadges, 150);
+      scrollT = setTimeout(attachBadges, 120);
     }, { passive:true });
   }
-
-  // const _ARC_BATCH_SIZE = 1;
-  // const _ARC_DEBOUNCE_MS = 0;
-
 })();
