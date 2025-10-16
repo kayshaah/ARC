@@ -56,6 +56,17 @@ def ingest(req: IngestReq):
           f.write(json.dumps(r.dict(), ensure_ascii=False) + "\n")
     return {"ok": True, "received": len(req.reviews)}
 
+
+DATA_DIR = Path("data")
+OUT_FILE = DATA_DIR / "reviews.jsonl"
+
+@app.post("/reset")
+def reset(asin: Optional[str] = None):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    target = OUT_FILE if not asin else (DATA_DIR / f"{asin}.jsonl")
+    target.write_text("", encoding="utf-8")
+    return {"ok": True, "reset": str(target)}
+
 @app.post("/score")
 def score(req: ScoreReq):
     # Optional: run your Python ML model here and return scores.
