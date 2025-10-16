@@ -78,7 +78,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: String(e) });
         }
         return;
-        }
+      }
+
 
       console.warn("[ARC/bg] unknown message:", msg);
       sendResponse({ ok: false, error: "Unknown message type" });
