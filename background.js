@@ -42,6 +42,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
 
+      if (msg.type === "ARC_FORCE_INJECT") {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.id || !tab.url) {
+          sendResponse({ ok: false, error: "No active tab." });
+          return;
+        }
+        const AMAZON_RE = /^https:\/\/www\.amazon\.(com|ca|co\.uk|in|de|it|es|fr)\//;
+        if (!AMAZON_RE.test(tab.url)) {
+          sendResponse({ ok: false, error: "Not an Amazon page." });
+          return;
+        }
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ["content_script.js"]
+        });
+        sendResponse({ ok: true });
+        }  catch (e) {
+        console.error("[ARC/bg] ARC_FORCE_INJECT error:", e);
+        sendResponse({ ok: false, error: String(e) });
+        }
+        return;
+        }
+
+
       console.warn("[ARC/bg] unknown message:", msg);
       sendResponse({ ok: false, error: "Unknown message type" });
     } catch (e) {
