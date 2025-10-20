@@ -17,8 +17,6 @@ arc-extension/
    └─ app.py                   # FastAPI dev server with /ingest (working) and /score (stub provided)
 ```
 
-> If you don’t keep a `server/` folder, you can place `app.py` at repo root; adjust paths accordingly.
-
 ---
 
 ## What works now
