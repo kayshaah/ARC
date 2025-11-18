@@ -156,15 +156,13 @@ function showTooltipNearBadge(badgeEl, data){
   badgeEl.addEventListener('mouseenter', enter);
   badgeEl.addEventListener('mouseleave', leave);
 
-  // NEW: prevent wheel/touch from closing the tooltip
-  // (keep scrolling inside the tooltip without bubbling to window)
   tip.addEventListener('wheel', (e) => { e.stopPropagation(); }, { passive: true });
   tip.addEventListener('touchmove', (e) => { e.stopPropagation(); }, { passive: true });
 
   const openScrollY = window.scrollY;
 
   const onScroll = () => {
-    // Only close if user isn't hovering and page scroll moved enough
+    // Only close if user isn't hovering AND page moved a bit
     if (hoverCount <= 0 && Math.abs(window.scrollY - openScrollY) > 40) {
       close();
     }
@@ -356,7 +354,6 @@ function findReviewNodes(){
       badge.addEventListener('focus',    () => showTooltipNearBadge(badge, tipData));
       badge.addEventListener('mouseleave', hideTooltip);
       badge.addEventListener('blur',       hideTooltip);
-      window.addEventListener('scroll', hideTooltip, { passive:true });
 
       // upload (base)
       const baseRecord = {
