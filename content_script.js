@@ -409,8 +409,8 @@ function scanBodyWordByWord(bodyEl, baseDelayMs, onDone) {
 }
 
 function runWordHighlightSequence(spans, baseDelayMs, onDone) {
-  const perWordDelay = 55; // ms between words
-  const flashDur = 45; // ms each word stays yellow
+  const perWordDelay = 15; // ms between words
+  const flashDur = 25; // ms each word stays yellow
 
   spans.forEach((span, idx) => {
     const delay = baseDelayMs + idx * perWordDelay;
