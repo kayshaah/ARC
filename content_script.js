@@ -290,6 +290,15 @@ function findReviewNodes(){
 // Scanner Function
 let arcScanHasRun = false;
 
+function runScanAnimationOnce() {
+  // absolute guard: only one scan per page
+  if (arcScanHasRun || window.__ARC_SCAN_COMPLETED__) return;
+  arcScanHasRun = true;
+  window.__ARC_SCAN_COMPLETED__ = true;
+
+  const reviews = findReviewNodes();
+  if (!reviews.length) return;
+
 function scanBodyWordByWord(bodyEl, baseDelayMs, onDone) {
   if (!bodyEl) {
     if (onDone) onDone();
@@ -326,8 +335,8 @@ function scanBodyWordByWord(bodyEl, baseDelayMs, onDone) {
 }
 
 function runWordHighlightSequence(spans, baseDelayMs, onDone) {
-  const perWordDelay = 55;  // ms between words
-  const flashDur = 55;      // ms each word stays yellow
+  const perWordDelay = 15;  // ms between words
+  const flashDur = 25;      // ms each word stays yellow
 
   spans.forEach((span, idx) => {
     const delay = baseDelayMs + idx * perWordDelay;
@@ -360,10 +369,11 @@ function runScanAnimationOnce() {
 
     const reviewStart = idx * perReviewOffset;
 
-    // quick block flashes on stars/name/title
-    [starsEl, nameEl, titleEl].forEach((el, i) => {
+    // quick block flashes: name, then stars
+    const blocks = [nameEl, starsEl];
+    blocks.forEach((el, i) => {
       if (!el) return;
-      const delay = reviewStart + i * 40;
+      const delay = reviewStart + i * 10; // name, then stars
       setTimeout(() => {
         el.classList.add('arc-scan-block');
         setTimeout(() => el.classList.remove('arc-scan-block'), 500);
@@ -537,8 +547,8 @@ function runScanAnimationOnce() {
   }
 
   function setupReviewScanTrigger(){
-  if (window.__ARC_SCAN_OBS_SETUP__) return;
-  window.__ARC_SCAN_OBS_SETUP__ = true;
+    if (window.__ARC_SCAN_OBS_SETUP__ || window.__ARC_SCAN_COMPLETED__) return;
+    window.__ARC_SCAN_OBS_SETUP__ = true;
 
   const container =
     document.querySelector('#cm-cr-dp-review-list') ||
