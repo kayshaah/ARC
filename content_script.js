@@ -149,8 +149,27 @@ function showTooltipNearBadge(badgeEl, data){
   tip.style.left = `${desiredLeft}px`;
 
   let hoverCount = 0;
-  const enter = () => { hoverCount++; };
-  const leave = () => { hoverCount--; setTimeout(() => { if (hoverCount <= 0) close(); }, 120); };
+  let closeTimer = null;
+
+  const scheduleClose = () => {
+    if (closeTimer) clearTimeout(closeTimer);
+    closeTimer = setTimeout(() => {
+      if (hoverCount <= 0) close();
+    }, 250);  // a bit more generous
+  };
+
+  const enter = () => {
+    hoverCount++;
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+  };
+  
+  const leave = () => {
+    hoverCount--;
+    if (hoverCount <= 0) scheduleClose();
+  };
   tip.addEventListener('mouseenter', enter);
   tip.addEventListener('mouseleave', leave);
   badgeEl.addEventListener('mouseenter', enter);
@@ -352,8 +371,8 @@ function findReviewNodes(){
       // tooltip events
       badge.addEventListener('mouseenter', () => showTooltipNearBadge(badge, tipData));
       badge.addEventListener('focus',    () => showTooltipNearBadge(badge, tipData));
-      badge.addEventListener('mouseleave', hideTooltip);
-      badge.addEventListener('blur',       hideTooltip);
+      //badge.addEventListener('mouseleave', hideTooltip);
+      //badge.addEventListener('blur',       hideTooltip);
 
       // upload (base)
       const baseRecord = {
