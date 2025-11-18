@@ -291,78 +291,23 @@ function findReviewNodes(){
 let arcScanHasRun = false;
 
 function runScanAnimationOnce() {
-  // absolute guard: only one scan per page
+  // if we've truly finished a scan, don't run again
   if (arcScanHasRun || window.__ARC_SCAN_COMPLETED__) return;
+
+  const reviews = findReviewNodes();
+  if (!reviews.length) {
+    // reviews container is visible but items not rendered yet – try once more
+    setTimeout(runScanAnimationOnce, 500);
+    return;
+  }
+
+  // now we KNOW we have reviews; lock it in
   arcScanHasRun = true;
   window.__ARC_SCAN_COMPLETED__ = true;
 
-  const reviews = findReviewNodes();
-  if (!reviews.length) return;
-
-function scanBodyWordByWord(bodyEl, baseDelayMs, onDone) {
-  if (!bodyEl) {
-    if (onDone) onDone();
-    return;
-  }
-  if (bodyEl.dataset.arcScanWords === "1") {
-    // Already split into words previously
-    const spans = bodyEl.querySelectorAll('.arc-scan-word');
-    runWordHighlightSequence(spans, baseDelayMs, onDone);
-    return;
-  }
-
-  const text = bodyEl.textContent || "";
-  const words = text.split(/(\s+)/); // keep spaces as separate entries
-  bodyEl.dataset.arcScanWords = "1";
-
-  const frag = document.createDocumentFragment();
-  words.forEach(w => {
-    if (/\s+/.test(w)) {
-      frag.appendChild(document.createTextNode(w));
-    } else {
-      const span = document.createElement('span');
-      span.className = 'arc-scan-word';
-      span.textContent = w;
-      frag.appendChild(span);
-    }
-  });
-
-  bodyEl.textContent = "";
-  bodyEl.appendChild(frag);
-
-  const spans = bodyEl.querySelectorAll('.arc-scan-word');
-  runWordHighlightSequence(spans, baseDelayMs, onDone);
-}
-
-function runWordHighlightSequence(spans, baseDelayMs, onDone) {
-  const perWordDelay = 15;  // ms between words
-  const flashDur = 25;      // ms each word stays yellow
-
-  spans.forEach((span, idx) => {
-    const delay = baseDelayMs + idx * perWordDelay;
-    setTimeout(() => {
-      span.classList.add('arc-scan-on');
-      setTimeout(() => span.classList.remove('arc-scan-on'), flashDur);
-    }, delay);
-  });
-
-  const total = baseDelayMs + spans.length * perWordDelay + flashDur + 40;
-  if (onDone) {
-    setTimeout(onDone, total);
-  }
-}
-
-function runScanAnimationOnce() {
-  if (arcScanHasRun) return;
-  arcScanHasRun = true;
-
-  const reviews = findReviewNodes();
-  if (!reviews.length) return;
-
-  const perReviewOffset = 1600; // ms between reviews
+  const perReviewOffset = 160; // ms between reviews
 
   reviews.forEach((node, idx) => {
-    const titleEl = pick(node,'[data-hook="review-title"]') || pick(node,'.review-title');
     const bodyEl  = pick(node,'[data-hook="review-body"]')  || pick(node,'.review-text-content');
     const starsEl = pick(node,'[data-hook="review-star-rating"]') || pick(node,'.a-icon-star');
     const nameEl  = pick(node,'.a-profile-name');
@@ -373,15 +318,15 @@ function runScanAnimationOnce() {
     const blocks = [nameEl, starsEl];
     blocks.forEach((el, i) => {
       if (!el) return;
-      const delay = reviewStart + i * 10; // name, then stars
+      const delay = reviewStart + i * 60;
       setTimeout(() => {
         el.classList.add('arc-scan-block');
         setTimeout(() => el.classList.remove('arc-scan-block'), 500);
       }, delay);
     });
 
-    // word-by-word scan on body, then reveal badge
-    scanBodyWordByWord(bodyEl, reviewStart + 80, () => {
+    // then word-by-word scan over the body, then reveal badge
+    scanBodyWordByWord(bodyEl, reviewStart + 140, () => {
       const badge = node.__arcBadgeEl;
       if (badge && !badge.classList.contains('arc-visible')) {
         badge.classList.add('arc-visible');   // fade in score AFTER scan
@@ -389,6 +334,7 @@ function runScanAnimationOnce() {
     });
   });
 }
+
 
 // === Core lifecycle ==========================================================
 (function(){
@@ -506,11 +452,10 @@ function runScanAnimationOnce() {
       // store reference so scanner can reveal later
       node.__arcBadgeEl = badge;
 
-      // if scan already ran (user scrolled before this review appeared), show badge immediately
-      if (arcScanHasRun) {
+      // if scan already happened before this review was attached, show badge immediately
+      if (arcScanHasRun || window.__ARC_SCAN_COMPLETED__) {
         badge.classList.add('arc-visible');
       }
-
 
       // tooltip data
       const reasons = [
