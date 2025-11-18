@@ -116,7 +116,7 @@ function buildTooltipHTML(data){
       <div class="hd" style="background:${headerBg}; color:${headerText};">
         <div style="font-weight:700;">ARC score: ${score}%</div>
       </div>
-      <div class="ct">
+      <div class="ct" style="max-height: 260px; overflow: auto;">
         <div class="rsn"><b>Reasons</b>
           <ul>${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
         </div>
@@ -140,11 +140,14 @@ function showTooltipNearBadge(badgeEl, data){
   wrap.innerHTML = buildTooltipHTML(data);
   const tip = wrap.firstElementChild;
   portal.sr.appendChild(tip);
+
+  // position...
   const rect = badgeEl.getBoundingClientRect(), gap = 6;
   const desiredTop = rect.bottom + gap;
   const desiredLeft = Math.min(Math.max(rect.right - 300, 8), window.innerWidth - 12 - 260);
   tip.style.top = `${Math.min(desiredTop, window.innerHeight - tip.offsetHeight - 12)}px`;
   tip.style.left = `${desiredLeft}px`;
+
   let hoverCount = 0;
   const enter = () => { hoverCount++; };
   const leave = () => { hoverCount--; setTimeout(() => { if (hoverCount <= 0) close(); }, 120); };
@@ -152,16 +155,36 @@ function showTooltipNearBadge(badgeEl, data){
   tip.addEventListener('mouseleave', leave);
   badgeEl.addEventListener('mouseenter', enter);
   badgeEl.addEventListener('mouseleave', leave);
-  const onScroll = () => close(), onResize = () => close(), onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  // NEW: prevent wheel/touch from closing the tooltip
+  // (keep scrolling inside the tooltip without bubbling to window)
+  tip.addEventListener('wheel', (e) => { e.stopPropagation(); }, { passive: true });
+  tip.addEventListener('touchmove', (e) => { e.stopPropagation(); }, { passive: true });
+
+  const openScrollY = window.scrollY;
+
+  const onScroll = () => {
+    // Only close if user isn't hovering and page scroll moved enough
+    if (hoverCount <= 0 && Math.abs(window.scrollY - openScrollY) > 40) {
+      close();
+    }
+  };
+  const onResize = () => close();
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  window.removeEventListener('scroll', hideTooltip);   // remove the global “close on any scroll”
   window.addEventListener('scroll', onScroll, { passive:true });
   window.addEventListener('resize', onResize);
   window.addEventListener('keydown', onKey);
+
   function close(){
     tip.remove();
     window.removeEventListener('scroll', onScroll);
     window.removeEventListener('resize', onResize);
     window.removeEventListener('keydown', onKey);
     openTooltip = null;
+    // Re-arm the global handler for next time if you want:
+    // window.addEventListener('scroll', hideTooltip, { passive:true });
   }
   openTooltip = close;
 }
