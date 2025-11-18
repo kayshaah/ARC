@@ -186,6 +186,111 @@ function buildTooltipHTML(data) {
     </div>
   `;
 }
+
+// === Reviewer credibility tooltip ===========================================
+function buildReviewerTooltipHTML(data) {
+  const { score, signals } = data;
+  const headerBg = "#eef2ff";    // soft indigo
+  const headerText = "#312e81";  // deep indigo
+
+  return `
+    <div class="tt" role="tooltip">
+      <div class="hd" style="background:${headerBg}; color:${headerText};">
+        <div style="font-weight:700;">Reviewer credibility: ${score}/100</div>
+      </div>
+      <div class="ct" style="max-height: 260px; overflow:auto;">
+        <div class="rsn"><b>Signals used</b>
+          <ul>
+            ${signals.map(s => `<li>${escapeHtml(s)}</li>`).join("")}
+          </ul>
+        </div>
+        <div style="margin-top:10px; font-size:11px; color:#666; line-height:1.4;">
+          ARC uses public review signals only. Future versions will incorporate
+          this reviewer's broader history and behaviour patterns.
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+
+// Reviewer ToolTip
+function showReviewerTooltipNear(badgeEl, data) {
+  const portal = getOrCreateTooltipPortal();
+  if (openTooltip) { openTooltip(); openTooltip = null; }
+
+  const wrap = document.createElement("div");
+  wrap.innerHTML = buildReviewerTooltipHTML(data);
+  const tip = wrap.firstElementChild;
+  portal.sr.appendChild(tip);
+
+  // position just above / near the badge
+  const rect = badgeEl.getBoundingClientRect();
+  const gap = 6;
+  const desiredTop = rect.top - gap - tip.offsetHeight;
+  const desiredLeft = Math.min(
+    Math.max(rect.left - 40, 8),
+    window.innerWidth - 12 - 260
+  );
+  tip.style.top = `${Math.max(8, desiredTop)}px`;
+  tip.style.left = `${desiredLeft}px`;
+
+  let hoverCount = 0;
+  let closeTimer = null;
+
+  const scheduleClose = () => {
+    if (closeTimer) clearTimeout(closeTimer);
+    closeTimer = setTimeout(() => {
+      if (hoverCount <= 0) close();
+    }, 220);
+  };
+
+  const enter = () => {
+    hoverCount++;
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+  };
+
+  const leave = () => {
+    hoverCount--;
+    if (hoverCount <= 0) scheduleClose();
+  };
+
+  tip.addEventListener("mouseenter", enter);
+  tip.addEventListener("mouseleave", leave);
+  badgeEl.addEventListener("mouseenter", enter);
+  badgeEl.addEventListener("mouseleave", leave);
+
+  tip.addEventListener("wheel", e => { e.stopPropagation(); }, { passive: true });
+  tip.addEventListener("touchmove", e => { e.stopPropagation(); }, { passive: true });
+
+  const openScrollY = window.scrollY;
+  const onScroll = () => {
+    if (hoverCount <= 0 && Math.abs(window.scrollY - openScrollY) > 40) {
+      close();
+    }
+  };
+  const onResize = () => close();
+  const onKey = e => { if (e.key === "Escape") close(); };
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onResize);
+  window.addEventListener("keydown", onKey);
+
+  function close() {
+    tip.remove();
+    window.removeEventListener("scroll", onScroll);
+    window.removeEventListener("resize", onResize);
+    window.removeEventListener("keydown", onKey);
+    openTooltip = null;
+  }
+
+  openTooltip = close;
+}
+
+
 function showTooltipNearBadge(badgeEl, data) {
   const portal = getOrCreateTooltipPortal();
   if (openTooltip) {
@@ -316,6 +421,118 @@ function reviewImageCount(node) {
   );
   return imgs ? imgs.length : 0;
 }
+
+function computeReviewerCredibility({ verified, imgCount, reviewLength }) {
+  // Very simple placeholder model: 0–100
+  let score = 50;
+
+  if (verified) score += 15;           // verified purchase is a strong plus
+  if (imgCount > 0) score += Math.min(10, imgCount * 3);
+  if (reviewLength > 200) score += 5;
+  if (reviewLength < 40) score -= 10;
+
+  // clamp
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function attachReviewerCredibilityPill(node, { verified, imgCount, reviewLength }) {
+  const nameEl = pick(node, ".a-profile-name");
+  if (!nameEl || nameEl.dataset.arcReviewerBadged === "1") return;
+  nameEl.dataset.arcReviewerBadged = "1";
+
+  const score = computeReviewerCredibility({ verified, imgCount, reviewLength });
+
+  const signals = [
+    verified ? "This review is a Verified Purchase." : "Purchase not marked as verified.",
+    reviewLength > 0 ? `Review length: ${reviewLength} characters.` : "No body text detected.",
+    imgCount > 0 ? `${imgCount} image${imgCount > 1 ? "s" : ""} attached to this review.` : "No images attached.",
+    "Future versions will incorporate this reviewer's broader profile history."
+  ];
+
+  // Wrap the name in a relatively-positioned host so we can float a pill above it
+  const host = document.createElement("span");
+  host.className = "arc-reviewer-host";
+  host.style.position = "relative";
+  host.style.display = "inline-block";
+
+  nameEl.parentNode.insertBefore(host, nameEl);
+  host.appendChild(nameEl);
+
+  // Shadow root for isolated styling
+  const sr = host.attachShadow({ mode: "open" });
+  sr.innerHTML = `
+    <style>
+      .pill-wrap {
+        position:absolute;
+        left:0;
+        bottom:100%;
+        transform: translateY(-4px);
+        display:inline-flex;
+        align-items:center;
+        gap:6px;
+        padding:3px 7px;
+        border-radius:12px;
+        background: linear-gradient(135deg, #eef2ff, #e0f2fe);
+        box-shadow:0 4px 12px rgba(15,23,42,0.18);
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+        font-size:11px;
+        color:#0f172a;
+        opacity:0;
+        transform-origin: bottom left;
+        pointer-events:auto;
+        transition: opacity .18s ease-out, transform .18s ease-out;
+      }
+      .pill-wrap.visible {
+        opacity:1;
+        transform: translateY(-2px);
+      }
+      .dot {
+        width:6px;
+        height:6px;
+        border-radius:999px;
+        background:#22c55e;
+        box-shadow:0 0 0 2px rgba(34,197,94,0.3);
+      }
+      .label {
+        font-weight:600;
+      }
+      .score {
+        font-weight:700;
+        font-variant-numeric:tabular-nums;
+      }
+      .pill-wrap:hover {
+        transform: translateY(-3px);
+      }
+    </style>
+    <div class="pill-wrap">
+      <div class="dot"></div>
+      <div class="label">Reviewer</div>
+      <div class="score">${score}</div>
+    </div>
+  `;
+
+  const pill = sr.querySelector(".pill-wrap");
+
+  // Show pill when hovering over reviewer name (smooth & unique micro-interaction)
+  nameEl.addEventListener("mouseenter", () => {
+    pill.classList.add("visible");
+  });
+  nameEl.addEventListener("mouseleave", () => {
+    pill.classList.remove("visible");
+  });
+
+  // Tooltip: details on hover over the pill itself
+  const tipData = { score, signals };
+  pill.addEventListener("mouseenter", () => {
+    pill.classList.add("visible");
+    showReviewerTooltipNear(host, tipData);
+  });
+  pill.addEventListener("mouseleave", () => {
+    pill.classList.remove("visible");
+    hideTooltip();
+  });
+}
+
 function expandTruncatedIfAny(node) {
   const btn = node.querySelector(
     'a[data-hook="review-body-read-more"], a.cr-expand-review, .a-expander-header a, .a-expander-prompt'
@@ -579,6 +796,15 @@ function runScanAnimationOnce() {
       const author =
         pick(node, ".a-profile-name")?.innerText?.trim() || "Unknown";
       const authorHref = pick(node, ".a-profile")?.getAttribute("href") || null;
+
+      // reviewer credibility pill (above name)
+      const reviewLength = (body || "").length;
+      attachReviewerCredibilityPill(node, {
+        verified,
+        imgCount,
+        reviewLength
+      });
+
 
       // product ASIN + stable key
       const asin = getPageASIN();
