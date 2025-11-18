@@ -86,45 +86,35 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // === ARC "scan" animation styles ============================================
+// === ARC scan animation styles ==============================================
 (function injectArcScanStyles(){
   const id = "arc-scan-styles";
   if (document.getElementById(id)) return;
   const style = document.createElement("style");
   style.id = id;
   style.textContent = `
-    @keyframes arcScanHighlightText {
-      0%   { background-color: rgba(129, 230, 217, 0);   }
-      25%  { background-color: rgba(129, 230, 217, 0.8); }
-      100% { background-color: rgba(129, 230, 217, 0);   }
+    .arc-scan-block {
+      background-color: rgba(255, 245, 157, 0.0);
+      border-radius: 4px;
+      animation: arcScanBlock 0.45s ease-out forwards;
     }
-    @keyframes arcScanHighlightStars {
-      0%   { background-color: rgba(252, 211, 77, 0);   }
-      25%  { background-color: rgba(252, 211, 77, 0.9); }
-      100% { background-color: rgba(252, 211, 77, 0);   }
-    }
-    @keyframes arcScanHighlightName {
-      0%   { background-color: rgba(196, 181, 253, 0);   }
-      25%  { background-color: rgba(196, 181, 253, 0.9); }
-      100% { background-color: rgba(196, 181, 253, 0);   }
+    @keyframes arcScanBlock {
+      0%   { background-color: rgba(255,245,157,0.0); }
+      35%  { background-color: rgba(255,245,157,0.95); }
+      100% { background-color: rgba(255,245,157,0.0); }
     }
 
-    .arc-scan-text {
-      animation: arcScanHighlightText 0.6s ease-out forwards;
-      border-radius: 4px;
-      pointer-events: auto;
+    .arc-scan-word {
+      background-color: transparent;
+      transition: background-color 0.12s ease-out;
+      border-radius: 3px;
     }
-    .arc-scan-stars {
-      animation: arcScanHighlightStars 0.6s ease-out forwards;
-      border-radius: 4px;
-    }
-    .arc-scan-name {
-      animation: arcScanHighlightName 0.6s ease-out forwards;
-      border-radius: 4px;
+    .arc-scan-word.arc-scan-on {
+      background-color: rgba(255,245,157,0.95);
     }
   `;
   document.head.appendChild(style);
 })();
-
 
 // === Tooltip portal (page-level shadow root; no clipping) ===================
 let arcTooltip = null, openTooltip = null;
@@ -300,6 +290,59 @@ function findReviewNodes(){
 // Scanner Function
 let arcScanHasRun = false;
 
+function scanBodyWordByWord(bodyEl, baseDelayMs, onDone) {
+  if (!bodyEl) {
+    if (onDone) onDone();
+    return;
+  }
+  if (bodyEl.dataset.arcScanWords === "1") {
+    // Already split into words previously
+    const spans = bodyEl.querySelectorAll('.arc-scan-word');
+    runWordHighlightSequence(spans, baseDelayMs, onDone);
+    return;
+  }
+
+  const text = bodyEl.textContent || "";
+  const words = text.split(/(\s+)/); // keep spaces as separate entries
+  bodyEl.dataset.arcScanWords = "1";
+
+  const frag = document.createDocumentFragment();
+  words.forEach(w => {
+    if (/\s+/.test(w)) {
+      frag.appendChild(document.createTextNode(w));
+    } else {
+      const span = document.createElement('span');
+      span.className = 'arc-scan-word';
+      span.textContent = w;
+      frag.appendChild(span);
+    }
+  });
+
+  bodyEl.textContent = "";
+  bodyEl.appendChild(frag);
+
+  const spans = bodyEl.querySelectorAll('.arc-scan-word');
+  runWordHighlightSequence(spans, baseDelayMs, onDone);
+}
+
+function runWordHighlightSequence(spans, baseDelayMs, onDone) {
+  const perWordDelay = 28;  // ms between words
+  const flashDur = 90;      // ms each word stays yellow
+
+  spans.forEach((span, idx) => {
+    const delay = baseDelayMs + idx * perWordDelay;
+    setTimeout(() => {
+      span.classList.add('arc-scan-on');
+      setTimeout(() => span.classList.remove('arc-scan-on'), flashDur);
+    }, delay);
+  });
+
+  const total = baseDelayMs + spans.length * perWordDelay + flashDur + 40;
+  if (onDone) {
+    setTimeout(onDone, total);
+  }
+}
+
 function runScanAnimationOnce() {
   if (arcScanHasRun) return;
   arcScanHasRun = true;
@@ -307,8 +350,7 @@ function runScanAnimationOnce() {
   const reviews = findReviewNodes();
   if (!reviews.length) return;
 
-  const perReviewDelay = 140; // ms between reviews
-  const perFieldDelay  = 40;  // stagger title/body/stars/name inside each review
+  const perReviewOffset = 160; // ms between reviews
 
   reviews.forEach((node, idx) => {
     const titleEl = pick(node,'[data-hook="review-title"]') || pick(node,'.review-title');
@@ -316,27 +358,27 @@ function runScanAnimationOnce() {
     const starsEl = pick(node,'[data-hook="review-star-rating"]') || pick(node,'.a-icon-star');
     const nameEl  = pick(node,'.a-profile-name');
 
-    const start = idx * perReviewDelay;
+    const reviewStart = idx * perReviewOffset;
 
-    const targets = [
-      { el: starsEl, cls: "arc-scan-stars",  extra: 0 },
-      { el: nameEl,  cls: "arc-scan-name",   extra: perFieldDelay },
-      { el: titleEl, cls: "arc-scan-text",   extra: perFieldDelay * 2 },
-      { el: bodyEl,  cls: "arc-scan-text",   extra: perFieldDelay * 3 },
-    ];
-
-    targets.forEach(({ el, cls, extra }) => {
+    // quick block flashes on stars/name/title
+    [starsEl, nameEl, titleEl].forEach((el, i) => {
       if (!el) return;
-      const delay = start + extra;
+      const delay = reviewStart + i * 40;
       setTimeout(() => {
-        el.classList.add(cls);
-        // remove class after animation so DOM is clean
-        setTimeout(() => el.classList.remove(cls), 700);
+        el.classList.add('arc-scan-block');
+        setTimeout(() => el.classList.remove('arc-scan-block'), 500);
       }, delay);
+    });
+
+    // word-by-word scan on body, then reveal badge
+    scanBodyWordByWord(bodyEl, reviewStart + 80, () => {
+      const badge = node.__arcBadgeEl;
+      if (badge && !badge.classList.contains('arc-visible')) {
+        badge.classList.add('arc-visible');   // fade in score AFTER scan
+      }
     });
   });
 }
-
 
 // === Core lifecycle ==========================================================
 (function(){
@@ -364,8 +406,8 @@ function runScanAnimationOnce() {
     await ensureResetOnceForProduct();  // <- single reset, then scrape
     addEnabledDot();
     attachBadges();
-    setTimeout(runScanAnimationOnce, 1600);
     observeForNewReviews();
+    setupReviewScanTrigger(); 
   }
   function teardown(){
     removeEnabledDot();
@@ -428,19 +470,37 @@ function runScanAnimationOnce() {
       node.prepend(host);
       const sr = host.attachShadow({ mode:'open' });
       sr.innerHTML = `<style>
-         .badge{position:absolute; top:6px; right:6px; padding:6px 8px; border-radius:8px;
-                font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
-                font-weight:700; font-size:12px; cursor:pointer; user-select:none;
-                box-shadow:0 4px 14px rgba(0,0,0,.12); transition: transform .12s ease;}
+         .badge{
+            position:absolute; top:6px; right:6px; padding:6px 8px; border-radius:8px;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+            font-weight:700; font-size:12px; cursor:pointer; user-select:none;
+            box-shadow:0 4px 14px rgba(0,0,0,.12);
+            transform: translateY(0);
+            opacity: 0;                          /* hidden until scan done */
+            transition: opacity .25s ease, transform .12s ease;
+         }
+         .badge.arc-visible{
+            opacity: 1;
+         }
          .badge:hover{ transform: translateY(-1px); }
       </style>
       <div class="badge">${score}%</div>`;
+
       const badge = sr.querySelector('.badge');
 
-      // color
+      // color:
       const good = score >= 60;
       badge.style.background = good ? '#eef9f1' : '#fff1f1';
       badge.style.color = good ? '#0a5a2b' : '#7a0000';
+      
+      // store reference so scanner can reveal later
+      node.__arcBadgeEl = badge;
+
+      // if scan already ran (user scrolled before this review appeared), show badge immediately
+      if (arcScanHasRun) {
+        badge.classList.add('arc-visible');
+      }
+
 
       // tooltip data
       const reasons = [
@@ -475,6 +535,36 @@ function runScanAnimationOnce() {
       safeEnqueue(review_key, 'base', baseRecord);
     });
   }
+
+  function setupReviewScanTrigger(){
+  if (window.__ARC_SCAN_OBS_SETUP__) return;
+  window.__ARC_SCAN_OBS_SETUP__ = true;
+
+  const container =
+    document.querySelector('#cm-cr-dp-review-list') ||
+    document.querySelector('#reviewsMedley') ||
+    document.querySelector('#cm_cr-review_list') ||
+    document.querySelector('#reviews-container');
+
+  if (!container) {
+    // fallback: try again later, reviews container might not be in DOM yet
+    setTimeout(() => { window.__ARC_SCAN_OBS_SETUP__ = false; setupReviewScanTrigger(); }, 800);
+    return;
+  }
+
+  const io = new IntersectionObserver((entries, obs) => {
+    for (const e of entries) {
+      if (e.isIntersecting && e.intersectionRatio > 0.2) {
+        // user has actually scrolled near the reviews
+        runScanAnimationOnce();
+        obs.disconnect();
+        break;
+      }
+    }
+  }, { threshold: [0.2] });
+
+  io.observe(container);
+}
 
   function observeForNewReviews(){
     const container = document.querySelector('#reviewsMedley, #cm_cr-review_list, #cm-cr-dp-review-list, #reviews-container')
