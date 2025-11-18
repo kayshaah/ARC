@@ -85,7 +85,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushUpload();
 });
 
-// === ARC "scan" animation styles ============================================
 // === ARC scan animation styles ==============================================
 (function injectArcScanStyles(){
   const id = "arc-scan-styles";
@@ -94,25 +93,26 @@ document.addEventListener('visibilitychange', () => {
   style.id = id;
   style.textContent = `
     .arc-scan-block {
-      background-color: rgba(255, 245, 157, 0.0);
+      background-color: rgba(255, 223, 88, 0.0);
       border-radius: 4px;
       animation: arcScanBlock 0.45s ease-out forwards;
     }
     @keyframes arcScanBlock {
-      0%   { background-color: rgba(255,245,157,0.0); }
-      35%  { background-color: rgba(255,245,157,0.95); }
-      100% { background-color: rgba(255,245,157,0.0); }
+      0%   { background-color: rgba(255,223,88,0.0); }
+      35%  { background-color: rgba(255,223,88,0.95); }
+      100% { background-color: rgba(255,223,88,0.0); }
     }
-
+  
     .arc-scan-word {
       background-color: transparent;
       transition: background-color 0.12s ease-out;
       border-radius: 3px;
     }
     .arc-scan-word.arc-scan-on {
-      background-color: rgba(255,245,157,0.95);
+      background-color: rgba(255,223,88,0.95);
     }
   `;
+
   document.head.appendChild(style);
 })();
 
@@ -326,8 +326,8 @@ function scanBodyWordByWord(bodyEl, baseDelayMs, onDone) {
 }
 
 function runWordHighlightSequence(spans, baseDelayMs, onDone) {
-  const perWordDelay = 28;  // ms between words
-  const flashDur = 90;      // ms each word stays yellow
+  const perWordDelay = 55;  // ms between words
+  const flashDur = 55;      // ms each word stays yellow
 
   spans.forEach((span, idx) => {
     const delay = baseDelayMs + idx * perWordDelay;
@@ -350,7 +350,7 @@ function runScanAnimationOnce() {
   const reviews = findReviewNodes();
   if (!reviews.length) return;
 
-  const perReviewOffset = 160; // ms between reviews
+  const perReviewOffset = 1600; // ms between reviews
 
   reviews.forEach((node, idx) => {
     const titleEl = pick(node,'[data-hook="review-title"]') || pick(node,'.review-title');
