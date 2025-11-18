@@ -441,7 +441,8 @@ function runScanAnimationOnce() {
   arcScanHasRun = true;
   window.__ARC_SCAN_COMPLETED__ = true;
 
-  const perReviewOffset = 160; // ms between reviews
+  // make this bigger if you want slower “per review” rhythm
+  const perReviewOffset = 600; // ms between reviews
 
   reviews.forEach((node, idx) => {
     const bodyEl =
@@ -454,19 +455,25 @@ function runScanAnimationOnce() {
 
     const reviewStart = idx * perReviewOffset;
 
-    // quick block flashes: name, then stars
-    const blocks = [nameEl, starsEl];
-    blocks.forEach((el, i) => {
-      if (!el) return;
-      const delay = reviewStart + i * 60;
+    // --- Step 1: name flash (only on name) ---
+    if (nameEl) {
       setTimeout(() => {
-        el.classList.add("arc-scan-block");
-        setTimeout(() => el.classList.remove("arc-scan-block"), 500);
-      }, delay);
-    });
+        nameEl.classList.add("arc-scan-block");
+        setTimeout(() => nameEl.classList.remove("arc-scan-block"), 400);
+      }, reviewStart + 0);
+    }
 
-    // then word-by-word scan over the body, then reveal badge
-    scanBodyWordByWord(bodyEl, reviewStart + 140, () => {
+    // --- Step 2: stars flash (only on stars) ---
+    if (starsEl) {
+      setTimeout(() => {
+        starsEl.classList.add("arc-scan-block");
+        setTimeout(() => starsEl.classList.remove("arc-scan-block"), 400);
+      }, reviewStart + 250);
+    }
+
+    // --- Step 3: body word-by-word, then reveal badge ---
+    const bodyStart = reviewStart + 500; // starts after name + stars done
+    scanBodyWordByWord(bodyEl, bodyStart, () => {
       const badge = node.__arcBadgeEl;
       if (badge && !badge.classList.contains("arc-visible")) {
         badge.classList.add("arc-visible"); // fade in score AFTER scan
