@@ -85,6 +85,47 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushUpload();
 });
 
+// === ARC "scan" animation styles ============================================
+(function injectArcScanStyles(){
+  const id = "arc-scan-styles";
+  if (document.getElementById(id)) return;
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent = `
+    @keyframes arcScanHighlightText {
+      0%   { background-color: rgba(129, 230, 217, 0);   }
+      25%  { background-color: rgba(129, 230, 217, 0.8); }
+      100% { background-color: rgba(129, 230, 217, 0);   }
+    }
+    @keyframes arcScanHighlightStars {
+      0%   { background-color: rgba(252, 211, 77, 0);   }
+      25%  { background-color: rgba(252, 211, 77, 0.9); }
+      100% { background-color: rgba(252, 211, 77, 0);   }
+    }
+    @keyframes arcScanHighlightName {
+      0%   { background-color: rgba(196, 181, 253, 0);   }
+      25%  { background-color: rgba(196, 181, 253, 0.9); }
+      100% { background-color: rgba(196, 181, 253, 0);   }
+    }
+
+    .arc-scan-text {
+      animation: arcScanHighlightText 0.6s ease-out forwards;
+      border-radius: 4px;
+      pointer-events: auto;
+    }
+    .arc-scan-stars {
+      animation: arcScanHighlightStars 0.6s ease-out forwards;
+      border-radius: 4px;
+    }
+    .arc-scan-name {
+      animation: arcScanHighlightName 0.6s ease-out forwards;
+      border-radius: 4px;
+    }
+  `;
+  document.head.appendChild(style);
+})();
+
+
 // === Tooltip portal (page-level shadow root; no clipping) ===================
 let arcTooltip = null, openTooltip = null;
 function getOrCreateTooltipPortal(){
@@ -256,6 +297,47 @@ function findReviewNodes(){
   return uniq;
 }
 
+// Scanner Function
+let arcScanHasRun = false;
+
+function runScanAnimationOnce() {
+  if (arcScanHasRun) return;
+  arcScanHasRun = true;
+
+  const reviews = findReviewNodes();
+  if (!reviews.length) return;
+
+  const perReviewDelay = 140; // ms between reviews
+  const perFieldDelay  = 40;  // stagger title/body/stars/name inside each review
+
+  reviews.forEach((node, idx) => {
+    const titleEl = pick(node,'[data-hook="review-title"]') || pick(node,'.review-title');
+    const bodyEl  = pick(node,'[data-hook="review-body"]')  || pick(node,'.review-text-content');
+    const starsEl = pick(node,'[data-hook="review-star-rating"]') || pick(node,'.a-icon-star');
+    const nameEl  = pick(node,'.a-profile-name');
+
+    const start = idx * perReviewDelay;
+
+    const targets = [
+      { el: starsEl, cls: "arc-scan-stars",  extra: 0 },
+      { el: nameEl,  cls: "arc-scan-name",   extra: perFieldDelay },
+      { el: titleEl, cls: "arc-scan-text",   extra: perFieldDelay * 2 },
+      { el: bodyEl,  cls: "arc-scan-text",   extra: perFieldDelay * 3 },
+    ];
+
+    targets.forEach(({ el, cls, extra }) => {
+      if (!el) return;
+      const delay = start + extra;
+      setTimeout(() => {
+        el.classList.add(cls);
+        // remove class after animation so DOM is clean
+        setTimeout(() => el.classList.remove(cls), 700);
+      }, delay);
+    });
+  });
+}
+
+
 // === Core lifecycle ==========================================================
 (function(){
   let arcEnabled = true;
@@ -282,6 +364,7 @@ function findReviewNodes(){
     await ensureResetOnceForProduct();  // <- single reset, then scrape
     addEnabledDot();
     attachBadges();
+    setTimeout(runScanAnimationOnce, 1600);
     observeForNewReviews();
   }
   function teardown(){
