@@ -14,7 +14,9 @@ try {
     if (chrome.runtime.lastError) console.warn("[ARC/cs] PING failed:", chrome.runtime.lastError.message);
     else console.log("[ARC/cs] PING ok:", resp);
   });
-} catch (e) { console.warn("[ARC/cs] PING exception:", e); }
+} catch (e) {
+  console.warn("[ARC/cs] PING exception:", e);
+}
 
 // --- singleton guard ---------------------------------------------------------
 if (window.__ARC_CS_ACTIVE__) throw new Error("ARC content script already active");
@@ -30,7 +32,9 @@ function currentProductKey() {
 }
 function arcSend(type, payload = {}) {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type, ...payload }, (resp) => resolve(resp || { ok: false }));
+    chrome.runtime.sendMessage({ type, ...payload }, (resp) =>
+      resolve(resp || { ok: false })
+    );
   });
 }
 async function ensureResetOnceForProduct() {
@@ -65,13 +69,19 @@ function enqueueForUpload(obj) {
 function flushUpload() {
   if (!_arcBatch.length) return;
   const toSend = _arcBatch.splice(0, _arcBatch.length);
-  chrome.runtime.sendMessage({ type: "ARC_UPLOAD_BATCH", payload: toSend }, (resp) => {
-    if (chrome.runtime.lastError) {
-      console.warn("[ARC/cs] upload sendMessage error:", chrome.runtime.lastError.message);
-      return;
+  chrome.runtime.sendMessage(
+    { type: "ARC_UPLOAD_BATCH", payload: toSend },
+    (resp) => {
+      if (chrome.runtime.lastError) {
+        console.warn(
+          "[ARC/cs] upload sendMessage error:",
+          chrome.runtime.lastError.message
+        );
+        return;
+      }
+      console.log("[ARC/cs] upload resp:", resp);
     }
-    console.log("[ARC/cs] upload resp:", resp);
-  });
+  );
 }
 function safeEnqueue(key, stage, record) {
   const k = `${key}:${stage}`;
@@ -115,7 +125,8 @@ document.addEventListener("visibilitychange", () => {
 })();
 
 // === Tooltip portal (shared for ARC + Reviewer) =============================
-let arcTooltip = null, openTooltip = null;
+let arcTooltip = null,
+  openTooltip = null;
 function getOrCreateTooltipPortal() {
   if (arcTooltip && document.body.contains(arcTooltip.host)) return arcTooltip;
   const host = document.createElement("div");
@@ -123,7 +134,7 @@ function getOrCreateTooltipPortal() {
     position: "fixed",
     inset: "0",
     zIndex: "2147483646",
-    pointerEvents: "none"
+    pointerEvents: "none",
   });
   const sr = host.attachShadow({ mode: "open" });
   sr.innerHTML = `<style>
@@ -183,14 +194,18 @@ function buildArcTooltipHTML(data) {
       </div>
       <div class="ct" style="max-height: 260px; overflow: auto;">
         <div class="rsn"><b>Reasons</b>
-          <ul>${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+          <ul>${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
         </div>
-        ${excerpt ? `
+        ${
+          excerpt
+            ? `
         <div style="margin-top:8px;"><b>Excerpt</b>
           <div style="padding:8px;background:#f7f7f7;border-radius:8px;max-height:120px;overflow:auto;">
             ${escapeHtml(excerpt)}
           </div>
-        </div>` : ``}
+        </div>`
+            : ``
+        }
         <div style="margin-top:8px; font-size:11px; color:#666;">
           ARC demo — heuristics + context. (Model scoring can replace this.)
         </div>
@@ -201,7 +216,10 @@ function buildArcTooltipHTML(data) {
 
 function showTooltipNearElement(anchorEl, htmlBuilder, data) {
   const portal = getOrCreateTooltipPortal();
-  if (openTooltip) { openTooltip(); openTooltip = null; }
+  if (openTooltip) {
+    openTooltip();
+    openTooltip = null;
+  }
 
   const wrap = document.createElement("div");
   wrap.innerHTML = htmlBuilder(data);
@@ -215,7 +233,10 @@ function showTooltipNearElement(anchorEl, htmlBuilder, data) {
     Math.max(rect.right - 300, 8),
     window.innerWidth - 12 - 260
   );
-  tip.style.top = `${Math.min(desiredTop, window.innerHeight - tip.offsetHeight - 12)}px`;
+  tip.style.top = `${Math.min(
+    desiredTop,
+    window.innerHeight - tip.offsetHeight - 12
+  )}px`;
   tip.style.left = `${desiredLeft}px`;
 
   let hoverCount = 0;
@@ -245,15 +266,29 @@ function showTooltipNearElement(anchorEl, htmlBuilder, data) {
   anchorEl.addEventListener("mouseenter", enter);
   anchorEl.addEventListener("mouseleave", leave);
 
-  tip.addEventListener("wheel", (e) => { e.stopPropagation(); }, { passive: true });
-  tip.addEventListener("touchmove", (e) => { e.stopPropagation(); }, { passive: true });
+  tip.addEventListener(
+    "wheel",
+    (e) => {
+      e.stopPropagation();
+    },
+    { passive: true }
+  );
+  tip.addEventListener(
+    "touchmove",
+    (e) => {
+      e.stopPropagation();
+    },
+    { passive: true }
+  );
 
   const openScrollY = window.scrollY;
   const onScroll = () => {
     if (hoverCount <= 0 && Math.abs(window.scrollY - openScrollY) > 40) close();
   };
   const onResize = () => close();
-  const onKey = (e) => { if (e.key === "Escape") close(); };
+  const onKey = (e) => {
+    if (e.key === "Escape") close();
+  };
 
   window.removeEventListener("scroll", hideTooltip);
   window.addEventListener("scroll", onScroll, { passive: true });
@@ -288,7 +323,7 @@ function buildReviewerTooltipHTML(data) {
       <div class="ct" style="max-height: 260px; overflow:auto;">
         <div class="rsn"><b>Signals about this reviewer</b>
           <ul>
-            ${signals.map(s => `<li>${escapeHtml(s)}</li>`).join("")}
+            ${signals.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}
           </ul>
         </div>
         <div style="margin-top:8px; font-size:11px; color:#666;">
@@ -305,13 +340,26 @@ function showReviewerTooltipNear(pillEl, data) {
 
 // === Helpers =================================================================
 function escapeHtml(s) {
-  return s ? s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : "";
+  return s
+    ? s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    : "";
 }
-function pick(el, sel){ return el.querySelector(sel); }
-function clamp01to100(x){ return Math.max(0, Math.min(100, Math.round(x))); }
-function hashKey(s){ let h=2166136261; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return (h>>>0).toString(16); }
+function pick(el, sel) {
+  return el.querySelector(sel);
+}
+function clamp01to100(x) {
+  return Math.max(0, Math.min(100, Math.round(x)));
+}
+function hashKey(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16);
+}
 
-function isVerifiedPurchase(reviewNode){
+function isVerifiedPurchase(reviewNode) {
   const badge = reviewNode.querySelector('[data-hook="avp-badge"]');
   if (badge && /verified\s*purchase/i.test(badge.textContent || "")) return true;
   for (const el of reviewNode.querySelectorAll("span,div")) {
@@ -326,27 +374,32 @@ function reviewImageCount(node) {
   );
   return imgs ? imgs.length : 0;
 }
-function expandTruncatedIfAny(node){
+function expandTruncatedIfAny(node) {
   const btn = node.querySelector(
     'a[data-hook="review-body-read-more"], a.cr-expand-review, .a-expander-header a, .a-expander-prompt'
   );
-  if (btn) btn.dispatchEvent(new MouseEvent("click", { bubbles:true, cancelable:true, view:window }));
+  if (btn)
+    btn.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, view: window })
+    );
 }
 
 // tiny heuristic score — replace with backend model when ready
-function baseScore({title, body, verified, imgCount}){
+function baseScore({ title, body, verified, imgCount }) {
   let score = 50;
-  const txt = (title||"") + " " + (body||"");
+  const txt = (title || "") + " " + (body || "");
   const len = txt.trim().length;
   if (verified) score += 20;
-  if (imgCount > 0) score += Math.min(8, 3 + Math.max(0, imgCount-1)*2);
+  if (imgCount > 0) score += Math.min(8, 3 + Math.max(0, imgCount - 1) * 2);
   if (len < 40) score -= 20;
   else if (len < 120) score -= 5;
   else score += 5;
   const lower = txt.toLowerCase();
-  ["amazing product","highly recommend","best purchase","works great"].forEach(p => {
-    if (lower.includes(p)) score -= 5;
-  });
+  ["amazing product", "highly recommend", "best purchase", "works great"].forEach(
+    (p) => {
+      if (lower.includes(p)) score -= 5;
+    }
+  );
   return clamp01to100(score);
 }
 
@@ -357,9 +410,22 @@ function reviewerKey(authorHref, authorName) {
   return (authorHref || "") + "::" + (authorName || "");
 }
 
+function defaultReviewerStats(extra) {
+  return Object.assign(
+    {
+      totalReviews: 0,
+      shareVerified: 0,
+      shareWithImages: 0,
+      avgLength: 0,
+      ratingVar: 0,
+    },
+    extra || {}
+  );
+}
+
 /**
  * Public entry: get profile stats for a reviewer (cached).
- * Returns a Promise<{ totalReviews, shareVerified, shareWithImages, avgLength, ratingVar }>
+ * Returns a Promise<{ totalReviews, shareVerified, shareWithImages, avgLength, ratingVar, [error]? }>
  */
 function getReviewerProfileStats(authorHref, authorName) {
   const key = reviewerKey(authorHref, authorName);
@@ -374,25 +440,32 @@ function getReviewerProfileStats(authorHref, authorName) {
 async function fetchReviewerProfileStats(authorHref, authorName) {
   try {
     if (!authorHref) {
-      return { totalReviews: 0, shareVerified: 0, shareWithImages: 0, avgLength: 0, ratingVar: 0 };
+      return defaultReviewerStats();
     }
     const profileUrl = new URL(authorHref, location.origin).toString();
 
     const res = await fetch(profileUrl, { credentials: "include" });
-    if (!res.ok) {
-      throw new Error("profile fetch " + res.status);
-    }
     const html = await res.text();
+
+    // crude CAPTCHA / anti-bot wall detection
+    if (
+      html.includes("Enter the characters you see below") ||
+      html.includes("Type the characters you see in this image")
+    ) {
+      console.warn("[ARC] Amazon blocked the profile scrape (CAPTCHA detected).");
+      return defaultReviewerStats({ error: "CAPTCHA" });
+    }
+
     const doc = new DOMParser().parseFromString(html, "text/html");
 
     const cards = Array.from(
       doc.querySelectorAll(
-        '.profile-at-card, [data-hook="review"], .a-section.review'
+        '.desktop-profile-content div[data-component-props], .a-section.review, div[id^="profile-at-card"], [data-hook="review"]'
       )
-    ).slice(0, 20); // cap to first 20
+    ).slice(0, 20); // be polite
 
     if (!cards.length) {
-      return { totalReviews: 0, shareVerified: 0, shareWithImages: 0, avgLength: 0, ratingVar: 0 };
+      return defaultReviewerStats();
     }
 
     let total = 0;
@@ -415,8 +488,9 @@ async function fetchReviewerProfileStats(authorHref, authorName) {
       }
 
       const ratingText =
-        card.querySelector('[data-hook="review-star-rating"], .a-icon-alt')?.textContent || "";
-      const rating = parseFloat(ratingText.split(" ")[0]);
+        card.querySelector('[data-hook="review-star-rating"], .a-icon-alt')
+          ?.textContent || "";
+      const rating = parseFloat((ratingText || "").split(" ")[0]);
       if (!isNaN(rating)) ratings.push(rating);
 
       const bodyEl =
@@ -429,29 +503,46 @@ async function fetchReviewerProfileStats(authorHref, authorName) {
 
     const shareVerified = total ? verifiedCount / total : 0;
     const shareWithImages = total ? imgCount / total : 0;
-    const avgLength = lengths.length ? (lengths.reduce((a,b)=>a+b,0) / lengths.length) : 0;
+    const avgLength = lengths.length
+      ? lengths.reduce((a, b) => a + b, 0) / lengths.length
+      : 0;
 
     let ratingVar = 0;
     if (ratings.length > 1) {
-      const mean = ratings.reduce((a,b)=>a+b,0) / ratings.length;
-      ratingVar = ratings.reduce((acc,r)=>acc + (r-mean)*(r-mean), 0) / ratings.length;
+      const mean = ratings.reduce((a, b) => a + b, 0) / ratings.length;
+      ratingVar =
+        ratings.reduce((acc, r) => acc + (r - mean) * (r - mean), 0) /
+        ratings.length;
     }
 
-    return { totalReviews: total, shareVerified, shareWithImages, avgLength, ratingVar };
+    return {
+      totalReviews: total,
+      shareVerified,
+      shareWithImages,
+      avgLength,
+      ratingVar,
+    };
   } catch (e) {
     console.warn("[ARC] reviewer profile scrape failed:", e);
-    return { totalReviews: 0, shareVerified: 0, shareWithImages: 0, avgLength: 0, ratingVar: 0 };
+    return defaultReviewerStats();
   }
 }
 
 function reviewerScoreFromSignalsAndProfile(localSignals, profileStats) {
   const { verified, imgCount, reviewLen, pageReviewCount } = localSignals;
-  const { totalReviews, shareVerified, shareWithImages, avgLength, ratingVar } = profileStats;
+  const {
+    totalReviews,
+    shareVerified,
+    shareWithImages,
+    avgLength, // currently unused but available
+    ratingVar,
+  } = profileStats;
 
   let s = 50;
 
   // Local (this product page)
   if (verified) s += 8;
+  if (imgCount > 0) s += 3;
   if (reviewLen > 150) s += 4;
   if (pageReviewCount > 1) s += Math.min(6, (pageReviewCount - 1) * 2);
 
@@ -461,7 +552,7 @@ function reviewerScoreFromSignalsAndProfile(localSignals, profileStats) {
   else if (totalReviews < 10) s += 12;
   else s += 20;
 
-  s += Math.round(20 * shareVerified);               // 0–20 pts
+  s += Math.round(20 * shareVerified); // 0–20 pts
   s += Math.round(10 * Math.min(shareWithImages, 0.7)); // cap at 70%
 
   if (ratingVar < 0.1 && totalReviews >= 3) s -= 5;
@@ -471,17 +562,25 @@ function reviewerScoreFromSignalsAndProfile(localSignals, profileStats) {
 }
 
 // === Review discovery (top-most only) =======================================
-function findReviewNodes(){
+function findReviewNodes() {
   const sels = [
-    '[data-hook="review"]','[data-hook="review-collapsed"]','[data-hook="review-card"]',
-    '.a-section.review','.review','.profile-at-review','.profile-at-card',
-    '.cr-widget-ReviewList [data-hook="review"]','#cm_cr-review_list [data-hook="review"]',
-    '#cm-cr-dp-review-list .review'
+    '[data-hook="review"]',
+    '[data-hook="review-collapsed"]',
+    '[data-hook="review-card"]',
+    ".a-section.review",
+    ".review",
+    ".profile-at-review",
+    ".profile-at-card",
+    '.cr-widget-ReviewList [data-hook="review"]',
+    '#cm_cr-review_list [data-hook="review"]',
+    "#cm-cr-dp-review-list .review",
   ];
-  const all=[];
-  sels.forEach(s => document.querySelectorAll(s).forEach(n => all.push(n)));
-  const uniq=[];
-  all.forEach(n => { if (!all.some(o => o !== n && o.contains(n))) uniq.push(n); });
+  const all = [];
+  sels.forEach((s) => document.querySelectorAll(s).forEach((n) => all.push(n)));
+  const uniq = [];
+  all.forEach((n) => {
+    if (!all.some((o) => o !== n && o.contains(n))) uniq.push(n);
+  });
   return uniq;
 }
 
@@ -502,7 +601,7 @@ function scanBodyWordByWord(bodyEl, baseDelayMs, onDone) {
   bodyEl.dataset.arcScanWords = "1";
 
   const frag = document.createDocumentFragment();
-  words.forEach(w => {
+  words.forEach((w) => {
     if (/\s+/.test(w)) {
       frag.appendChild(document.createTextNode(w));
     } else {
@@ -552,9 +651,13 @@ function runScanAnimationOnce() {
 
   const perReviewOffset = 160;
   reviews.forEach((node, idx) => {
-    const bodyEl  = pick(node,'[data-hook="review-body"]')  || pick(node,'.review-text-content');
-    const starsEl = pick(node,'[data-hook="review-star-rating"]') || pick(node,'.a-icon-star');
-    const nameEl  = pick(node,'.a-profile-name');
+    const bodyEl =
+      pick(node, "[data-hook=\"review-body\"]") ||
+      pick(node, ".review-text-content");
+    const starsEl =
+      pick(node, "[data-hook=\"review-star-rating\"]") ||
+      pick(node, ".a-icon-star");
+    const nameEl = pick(node, ".a-profile-name");
     const reviewStart = idx * perReviewOffset;
 
     const blocks = [nameEl, starsEl];
@@ -577,96 +680,116 @@ function runScanAnimationOnce() {
 }
 
 // === Core lifecycle ==========================================================
-(function(){
+(function () {
   let arcEnabled = true;
   let observer = null;
 
-  chrome.runtime?.onMessage?.addListener?.((msg,_sender,sendResponse)=>{
+  chrome.runtime?.onMessage?.addListener?.((msg, _sender, sendResponse) => {
     if (!msg || typeof msg !== "object") return;
     if (msg.type === "ARC_TOGGLE") {
       arcEnabled = !!msg.enabled;
       arcEnabled ? boot() : teardown();
-      sendResponse({ ok:true, enabled:arcEnabled });
+      sendResponse({ ok: true, enabled: arcEnabled });
     } else if (msg.type === "ARC_GET_STATUS") {
       sendResponse({ enabled: !!arcEnabled });
     }
     return true;
   });
-  chrome.storage?.local?.get?.({ arcEnabled:true }, (res) => {
+  chrome.storage?.local?.get?.({ arcEnabled: true }, (res) => {
     arcEnabled = !!res.arcEnabled;
     if (arcEnabled) boot();
   });
 
-  async function boot(){
+  async function boot() {
     await ensureResetOnceForProduct();
     addEnabledDot();
     attachBadges();
     observeForNewReviews();
     setupReviewScanTrigger();
   }
-  function teardown(){
+  function teardown() {
     removeEnabledDot();
-    document.querySelectorAll(".arc-badge-host").forEach(n => n.remove());
-    if (observer) { observer.disconnect(); observer = null; }
+    document.querySelectorAll(".arc-badge-host").forEach((n) => n.remove());
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
     hideTooltip();
     removeTooltipPortal();
     flushUpload();
   }
 
   // enabled indicator
-  function addEnabledDot(){
+  function addEnabledDot() {
     if (document.getElementById("arc-enabled-dot")) return;
     const dot = document.createElement("div");
     dot.id = "arc-enabled-dot";
     Object.assign(dot.style, {
-      position:"fixed", left:"8px", top:"8px", width:"10px", height:"10px",
-      borderRadius:"50%", background:"#22c55e",
-      boxShadow:"0 0 0 2px rgba(34,197,94,.25)",
-      zIndex:"2147483646", opacity:"0.85", pointerEvents:"none"
+      position: "fixed",
+      left: "8px",
+      top: "8px",
+      width: "10px",
+      height: "10px",
+      borderRadius: "50%",
+      background: "#22c55e",
+      boxShadow: "0 0 0 2px rgba(34,197,94,.25)",
+      zIndex: "2147483646",
+      opacity: "0.85",
+      pointerEvents: "none",
     });
     dot.title = "ARC enabled";
     document.body.appendChild(dot);
   }
-  function removeEnabledDot(){ document.getElementById("arc-enabled-dot")?.remove(); }
+  function removeEnabledDot() {
+    document.getElementById("arc-enabled-dot")?.remove();
+  }
 
-  function attachBadges(){
+  function attachBadges() {
     if (!arcEnabled) return;
     const reviews = findReviewNodes();
 
     // precompute counts per reviewer on THIS page
     const reviewerCounts = new Map();
-    reviews.forEach(node => {
-      const nameEl = pick(node,".a-profile-name");
-      const name = (nameEl && nameEl.textContent || "").trim();
-      const profileHref = pick(node,".a-profile")?.getAttribute("href") || "";
+    reviews.forEach((node) => {
+      const nameEl = pick(node, ".a-profile-name");
+      const name = ((nameEl && nameEl.textContent) || "").trim();
+      const profileHref = pick(node, ".a-profile")?.getAttribute("href") || "";
       const key = reviewerKey(profileHref, name);
       if (!key.trim()) return;
       reviewerCounts.set(key, (reviewerCounts.get(key) || 0) + 1);
     });
 
-    reviews.forEach(node => {
+    reviews.forEach((node) => {
       if (node.dataset.arcBadged === "1") return;
       node.dataset.arcBadged = "1";
       if (node.querySelector(".arc-badge-host")) return;
 
       expandTruncatedIfAny(node);
 
-      const title = pick(node,'[data-hook="review-title"]')?.innerText?.trim()
-                 || pick(node,'.review-title')?.innerText?.trim() || "";
-      const body  = pick(node,'[data-hook="review-body"]')?.innerText?.trim()
-                 || pick(node,'.review-text-content')?.innerText?.trim() || "";
-      const ratingText = pick(node,'[data-hook="review-star-rating"]')?.innerText
-                       || pick(node,'.a-icon-alt')?.innerText || "";
+      const title =
+        pick(node, '[data-hook="review-title"]')?.innerText?.trim() ||
+        pick(node, ".review-title")?.innerText?.trim() ||
+        "";
+      const body =
+        pick(node, '[data-hook="review-body"]')?.innerText?.trim() ||
+        pick(node, ".review-text-content")?.innerText?.trim() ||
+        "";
+      const ratingText =
+        pick(node, '[data-hook="review-star-rating"]')?.innerText ||
+        pick(node, ".a-icon-alt")?.innerText ||
+        "";
       const rating = ratingText ? parseFloat(ratingText.split(" ")[0]) : null;
       const verified = isVerifiedPurchase(node);
       const imgCount = reviewImageCount(node);
-      const authorEl = pick(node,'.a-profile-name');
-      const author   = authorEl?.innerText?.trim() || "Unknown";
-      const profileLink = pick(node,'.a-profile');
+      const authorEl = pick(node, ".a-profile-name");
+      const author = authorEl?.innerText?.trim() || "Unknown";
+      const profileLink = pick(node, ".a-profile");
       const authorHref = profileLink?.getAttribute("href") || null;
 
       const asin = getPageASIN();
-      const review_key = hashKey([author, title, body, asin || location.href].join("|"));
+      const review_key = hashKey(
+        [author, title, body, asin || location.href].join("|")
+      );
 
       const score = baseScore({ title, body, verified, imgCount });
 
@@ -675,7 +798,7 @@ function runScanAnimationOnce() {
       host.className = "arc-badge-host";
       host.style.position = "relative";
       node.prepend(host);
-      const sr = host.attachShadow({ mode:"open" });
+      const sr = host.attachShadow({ mode: "open" });
       sr.innerHTML = `<style>
          .badge{
             position:absolute; top:6px; right:6px; padding:6px 8px; border-radius:8px;
@@ -707,17 +830,26 @@ function runScanAnimationOnce() {
       // Tooltip data for ARC
       const reasons = [
         verified ? "Verified purchase" : "Unverified",
-        (title + body).length < 40 ? "Very short" :
-          ((title + body).length < 120 ? "Short" : "Detailed"),
-        ...(imgCount > 0 ? [`${imgCount} image${imgCount>1?"s":""} attached`] : [])
+        (title + body).length < 40
+          ? "Very short"
+          : (title + body).length < 120
+          ? "Short"
+          : "Detailed",
+        ...(imgCount > 0
+          ? [`${imgCount} image${imgCount > 1 ? "s" : ""} attached`]
+          : []),
       ];
       const excerpt = ((title ? title + " — " : "") + body).slice(0, 800);
       const tipData = { score, reasons, excerpt };
 
-      badge.addEventListener("mouseenter", () => showArcTooltipNearBadge(badge, tipData));
-      badge.addEventListener("focus",    () => showArcTooltipNearBadge(badge, tipData));
+      badge.addEventListener("mouseenter", () =>
+        showArcTooltipNearBadge(badge, tipData)
+      );
+      badge.addEventListener("focus", () =>
+        showArcTooltipNearBadge(badge, tipData)
+      );
 
-      // Reviewer pill decoration
+      // Reviewer pill decoration (lazy profile scraping)
       decorateReviewerPill({
         node,
         author,
@@ -725,7 +857,7 @@ function runScanAnimationOnce() {
         verified,
         imgCount,
         reviewLen: body.length,
-        reviewerCounts
+        reviewerCounts,
       });
 
       // Upload
@@ -741,14 +873,22 @@ function runScanAnimationOnce() {
         images_count: imgCount,
         reviewer_name: author || null,
         reviewer_profile_url: authorHref || null,
-        arc_score: score
+        arc_score: score,
       };
       safeEnqueue(review_key, "base", baseRecord);
     });
   }
 
   function decorateReviewerPill(opts) {
-    const { node, author, authorHref, verified, imgCount, reviewLen, reviewerCounts } = opts;
+    const {
+      node,
+      author,
+      authorHref,
+      verified,
+      imgCount,
+      reviewLen,
+      reviewerCounts,
+    } = opts;
     const nameEl = pick(node, ".a-profile-name");
     if (!nameEl || nameEl.dataset.arcReviewerDecorated === "1") return;
     nameEl.dataset.arcReviewerDecorated = "1";
@@ -768,68 +908,112 @@ function runScanAnimationOnce() {
 
     const pill = document.createElement("span");
     pill.className = "arc-reviewer-pill";
-    pill.textContent = "Reviewer …";
+    pill.textContent = "Reviewer";
     Object.assign(pill.style, {
-      display:"inline-flex",
-      alignItems:"center",
-      padding:"2px 8px",
-      borderRadius:"999px",
-      fontSize:"11px",
-      fontWeight:"600",
-      fontFamily:'system-ui,-apple-system,"Segoe UI",Roboto,Arial',
-      background:"#eef3ff",
-      color:"#1b3a8a",
-      border:"1px solid rgba(59,130,246,0.3)",
-      cursor:"pointer",
-      userSelect:"none"
+      display: "inline-flex",
+      alignItems: "center",
+      padding: "2px 8px",
+      borderRadius: "999px",
+      fontSize: "11px",
+      fontWeight: "600",
+      fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,Arial',
+      background: "#eef3ff",
+      color: "#1b3a8a",
+      border: "1px solid rgba(59,130,246,0.3)",
+      cursor: "pointer",
+      userSelect: "none",
     });
 
     host.insertBefore(pill, profileLink);
 
+    // Lazy profile scrape: only when user hovers / focuses the pill
+    let hasFetched = false;
+    let reviewerTipData = null;
+
     const localSignals = { verified, imgCount, reviewLen, pageReviewCount };
 
-    getReviewerProfileStats(authorHref, author).then((profileStats) => {
-      const rScore = reviewerScoreFromSignalsAndProfile(localSignals, profileStats);
-      pill.textContent = `Reviewer ${rScore}`;
+    async function loadDataAndShow() {
+      try {
+        if (!hasFetched) {
+          hasFetched = true;
+          pill.textContent = "Loading…";
 
-      const signals = [];
+          // Slight jitter to look human-ish if user scrubs over many pills
+          await new Promise((r) =>
+            setTimeout(r, 200 + Math.random() * 500)
+          );
 
-      if (profileStats.totalReviews > 0) {
-        signals.push(
-          `This reviewer has ${profileStats.totalReviews} review${profileStats.totalReviews>1?"s":""} on their public profile (sampled).`
-        );
-      } else {
-        signals.push("No public reviews were detected on this reviewer's profile.");
+          const profileStats = await getReviewerProfileStats(
+            authorHref,
+            author
+          );
+          const rScore = reviewerScoreFromSignalsAndProfile(
+            localSignals,
+            profileStats
+          );
+          pill.textContent = `Reviewer ${rScore}`;
+
+          const signals = [];
+
+          if (profileStats.error === "CAPTCHA") {
+            signals.push(
+              "Amazon asked for additional verification, so ARC could not analyze this reviewer's full profile."
+            );
+          } else if (profileStats.totalReviews > 0) {
+            signals.push(
+              `Analyzed ${profileStats.totalReviews} recent review${
+                profileStats.totalReviews > 1 ? "s" : ""
+              } from this profile (sampled).`
+            );
+            signals.push(
+              `${Math.round(
+                profileStats.shareVerified * 100
+              )}% of sampled reviews are Verified Purchases.`
+            );
+            signals.push(
+              `${Math.round(
+                profileStats.shareWithImages * 100
+              )}% of sampled reviews include images.`
+            );
+          } else {
+            signals.push(
+              "Could not retrieve review details from this reviewer's public profile (or it has limited data)."
+            );
+          }
+
+          if (pageReviewCount > 1) {
+            signals.push(
+              `This reviewer has ${pageReviewCount} review${
+                pageReviewCount > 1 ? "s" : ""
+              } visible on this product's page.`
+            );
+          } else {
+            signals.push(
+              "Only this review from this reviewer is visible on this product's page."
+            );
+          }
+
+          reviewerTipData = {
+            score: rScore,
+            name: author,
+            signals,
+          };
+        }
+
+        if (reviewerTipData) {
+          showReviewerTooltipNear(pill, reviewerTipData);
+        }
+      } catch (e) {
+        console.warn("[ARC] profile stats error:", e);
+        pill.textContent = "Reviewer ?";
       }
+    }
 
-      signals.push(
-        `About ${Math.round(profileStats.shareVerified*100)}% of their sampled reviews are Verified Purchases.`
-      );
-      signals.push(
-        `About ${Math.round(profileStats.shareWithImages*100)}% of their sampled reviews include images.`
-      );
-
-      if (pageReviewCount > 1) {
-        signals.push(`This reviewer has ${pageReviewCount} reviews visible on this product's page.`);
-      } else {
-        signals.push("Only this review from this reviewer is visible on this product's page.");
-      }
-
-      const reviewerTipData = {
-        score: rScore,
-        name: author,
-        signals
-      };
-
-      pill.addEventListener("mouseenter", () => showReviewerTooltipNear(pill, reviewerTipData));
-      pill.addEventListener("focus",     () => showReviewerTooltipNear(pill, reviewerTipData));
-    }).catch((e) => {
-      console.warn("[ARC] profile stats error:", e);
-      pill.textContent = "Reviewer";
-    });
+    pill.addEventListener("mouseenter", loadDataAndShow);
+    pill.addEventListener("focus", loadDataAndShow);
   }
 
-  function setupReviewScanTrigger(){
+  function setupReviewScanTrigger() {
     if (window.__ARC_SCAN_OBS_SETUP__ || window.__ARC_SCAN_COMPLETED__) return;
     window.__ARC_SCAN_OBS_SETUP__ = true;
 
@@ -847,29 +1031,37 @@ function runScanAnimationOnce() {
       return;
     }
 
-    const io = new IntersectionObserver((entries, obs) => {
-      for (const e of entries) {
-        if (e.isIntersecting && e.intersectionRatio > 0.2) {
-          runScanAnimationOnce();
-          obs.disconnect();
-          break;
+    const io = new IntersectionObserver(
+      (entries, obs) => {
+        for (const e of entries) {
+          if (e.isIntersecting && e.intersectionRatio > 0.2) {
+            runScanAnimationOnce();
+            obs.disconnect();
+            break;
+          }
         }
-      }
-    }, { threshold: [0.2] });
+      },
+      { threshold: [0.2] }
+    );
 
     io.observe(container);
   }
 
-  function observeForNewReviews(){
-    const container = document.querySelector(
-      "#reviewsMedley, #cm_cr-review_list, #cm-cr-dp-review-list, #reviews-container"
-    ) || document.body;
+  function observeForNewReviews() {
+    const container =
+      document.querySelector(
+        "#reviewsMedley, #cm_cr-review_list, #cm-cr-dp-review-list, #reviews-container"
+      ) || document.body;
     observer = new MutationObserver(() => setTimeout(attachBadges, 100));
-    observer.observe(container, { childList:true, subtree:true });
+    observer.observe(container, { childList: true, subtree: true });
     let scrollT;
-    window.addEventListener("scroll", () => {
-      clearTimeout(scrollT);
-      scrollT = setTimeout(attachBadges, 120);
-    }, { passive:true });
+    window.addEventListener(
+      "scroll",
+      () => {
+        clearTimeout(scrollT);
+        scrollT = setTimeout(attachBadges, 120);
+      },
+      { passive: true }
+    );
   }
 })();
