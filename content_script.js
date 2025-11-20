@@ -2,7 +2,7 @@
 // - One reset per product (session-scoped) before scraping
 // - Deduped review detection (top-most nodes only)
 // - Trust badge + hover tooltip (reasons + excerpt)
-// - Reviewer credibility pill + tooltip (page-level signals)
+// - Reviewer credibility pill + tooltip (profile + page signals)
 // - Verified Purchase + image count extraction
 // - Batched uploads to background -> FastAPI /ingest
 // - Flush on pagehide/hidden
@@ -276,7 +276,7 @@ function showArcTooltipNearBadge(badgeEl, data) {
 
 // ---- Reviewer tooltip -------------------------------------------------------
 function buildReviewerTooltipHTML(data) {
-  const { score, name, pageReviewCount, signals } = data;
+  const { score, name, signals } = data;
   const headerBg = "#eef3ff";
   const headerText = "#1b3a8a";
   return `
@@ -286,18 +286,14 @@ function buildReviewerTooltipHTML(data) {
         <div style="font-size:11px; opacity:0.9;">${escapeHtml(name || "")}</div>
       </div>
       <div class="ct" style="max-height: 260px; overflow:auto;">
-        <div class="rsn"><b>Signals from this page</b>
+        <div class="rsn"><b>Signals about this reviewer</b>
           <ul>
             ${signals.map(s => `<li>${escapeHtml(s)}</li>`).join("")}
-            <li>${pageReviewCount > 1
-              ? `This reviewer has ${pageReviewCount} reviews visible on this product's page.`
-              : `Only this review from this reviewer is visible on this product's page.`}
-            </li>
           </ul>
         </div>
         <div style="margin-top:8px; font-size:11px; color:#666;">
-          ARC uses only signals visible on this page for reviewer credibility.
-          Future versions may incorporate this reviewer's broader Amazon activity.
+          ARC uses only public, review-related signals for reviewer credibility.
+          Future versions may incorporate this reviewer's broader Amazon activity where available.
         </div>
       </div>
     </div>
@@ -354,14 +350,123 @@ function baseScore({title, body, verified, imgCount}){
   return clamp01to100(score);
 }
 
-// Reviewer credibility heuristic (page-level only)
-function reviewerScoreFromSignals({ verified, imgCount, reviewLen, pageReviewCount }) {
-  let s = 60;
-  if (verified) s += 10;
-  if (imgCount > 0) s += Math.min(8, 3 + Math.max(0, imgCount-1)*2);
-  if (reviewLen < 40) s -= 10;
-  else if (reviewLen > 200) s += 4;
+// === Reviewer profile scraping (client-side) ================================
+const _reviewerProfileCache = new Map(); // key -> Promise<stats>
+
+function reviewerKey(authorHref, authorName) {
+  return (authorHref || "") + "::" + (authorName || "");
+}
+
+/**
+ * Public entry: get profile stats for a reviewer (cached).
+ * Returns a Promise<{ totalReviews, shareVerified, shareWithImages, avgLength, ratingVar }>
+ */
+function getReviewerProfileStats(authorHref, authorName) {
+  const key = reviewerKey(authorHref, authorName);
+  if (_reviewerProfileCache.has(key)) {
+    return _reviewerProfileCache.get(key);
+  }
+  const p = fetchReviewerProfileStats(authorHref, authorName);
+  _reviewerProfileCache.set(key, p);
+  return p;
+}
+
+async function fetchReviewerProfileStats(authorHref, authorName) {
+  try {
+    if (!authorHref) {
+      return { totalReviews: 0, shareVerified: 0, shareWithImages: 0, avgLength: 0, ratingVar: 0 };
+    }
+    const profileUrl = new URL(authorHref, location.origin).toString();
+
+    const res = await fetch(profileUrl, { credentials: "include" });
+    if (!res.ok) {
+      throw new Error("profile fetch " + res.status);
+    }
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+
+    const cards = Array.from(
+      doc.querySelectorAll(
+        '.profile-at-card, [data-hook="review"], .a-section.review'
+      )
+    ).slice(0, 20); // cap to first 20
+
+    if (!cards.length) {
+      return { totalReviews: 0, shareVerified: 0, shareWithImages: 0, avgLength: 0, ratingVar: 0 };
+    }
+
+    let total = 0;
+    let verifiedCount = 0;
+    let imgCount = 0;
+    let lengths = [];
+    let ratings = [];
+
+    for (const card of cards) {
+      total += 1;
+
+      const text = card.textContent || "";
+      if (/verified\s*purchase/i.test(text)) {
+        verifiedCount += 1;
+      }
+
+      const imgs = card.querySelectorAll('img, [data-hook="review-image-tile"] img');
+      if (imgs.length > 0) {
+        imgCount += 1;
+      }
+
+      const ratingText =
+        card.querySelector('[data-hook="review-star-rating"], .a-icon-alt')?.textContent || "";
+      const rating = parseFloat(ratingText.split(" ")[0]);
+      if (!isNaN(rating)) ratings.push(rating);
+
+      const bodyEl =
+        card.querySelector('[data-hook="review-body"]') ||
+        card.querySelector(".review-text") ||
+        card;
+      const len = (bodyEl.textContent || "").trim().length;
+      lengths.push(len);
+    }
+
+    const shareVerified = total ? verifiedCount / total : 0;
+    const shareWithImages = total ? imgCount / total : 0;
+    const avgLength = lengths.length ? (lengths.reduce((a,b)=>a+b,0) / lengths.length) : 0;
+
+    let ratingVar = 0;
+    if (ratings.length > 1) {
+      const mean = ratings.reduce((a,b)=>a+b,0) / ratings.length;
+      ratingVar = ratings.reduce((acc,r)=>acc + (r-mean)*(r-mean), 0) / ratings.length;
+    }
+
+    return { totalReviews: total, shareVerified, shareWithImages, avgLength, ratingVar };
+  } catch (e) {
+    console.warn("[ARC] reviewer profile scrape failed:", e);
+    return { totalReviews: 0, shareVerified: 0, shareWithImages: 0, avgLength: 0, ratingVar: 0 };
+  }
+}
+
+function reviewerScoreFromSignalsAndProfile(localSignals, profileStats) {
+  const { verified, imgCount, reviewLen, pageReviewCount } = localSignals;
+  const { totalReviews, shareVerified, shareWithImages, avgLength, ratingVar } = profileStats;
+
+  let s = 50;
+
+  // Local (this product page)
+  if (verified) s += 8;
+  if (reviewLen > 150) s += 4;
   if (pageReviewCount > 1) s += Math.min(6, (pageReviewCount - 1) * 2);
+
+  // Profile-level
+  if (totalReviews === 0) s -= 5;
+  else if (totalReviews < 3) s += 5;
+  else if (totalReviews < 10) s += 12;
+  else s += 20;
+
+  s += Math.round(20 * shareVerified);               // 0–20 pts
+  s += Math.round(10 * Math.min(shareWithImages, 0.7)); // cap at 70%
+
+  if (ratingVar < 0.1 && totalReviews >= 3) s -= 5;
+  else if (ratingVar > 0.4) s += 3;
+
   return clamp01to100(s);
 }
 
@@ -528,13 +633,13 @@ function runScanAnimationOnce() {
     if (!arcEnabled) return;
     const reviews = findReviewNodes();
 
-    // precompute counts of how many reviews each reviewer has on this PAGE
+    // precompute counts per reviewer on THIS page
     const reviewerCounts = new Map();
     reviews.forEach(node => {
       const nameEl = pick(node,".a-profile-name");
       const name = (nameEl && nameEl.textContent || "").trim();
       const profileHref = pick(node,".a-profile")?.getAttribute("href") || "";
-      const key = (profileHref || "") + "::" + name;
+      const key = reviewerKey(profileHref, name);
       if (!key.trim()) return;
       reviewerCounts.set(key, (reviewerCounts.get(key) || 0) + 1);
     });
@@ -649,7 +754,7 @@ function runScanAnimationOnce() {
     nameEl.dataset.arcReviewerDecorated = "1";
 
     const profileLink = nameEl.closest("a") || nameEl;
-    const key = (authorHref || "") + "::" + (author || "");
+    const key = reviewerKey(authorHref, author);
     const pageReviewCount = reviewerCounts.get(key) || 1;
 
     const host = document.createElement("span");
@@ -663,7 +768,7 @@ function runScanAnimationOnce() {
 
     const pill = document.createElement("span");
     pill.className = "arc-reviewer-pill";
-    pill.textContent = "Reviewer";
+    pill.textContent = "Reviewer …";
     Object.assign(pill.style, {
       display:"inline-flex",
       alignItems:"center",
@@ -681,30 +786,47 @@ function runScanAnimationOnce() {
 
     host.insertBefore(pill, profileLink);
 
-    // Reviewer score + signals
-    const rScore = reviewerScoreFromSignals({
-      verified,
-      imgCount,
-      reviewLen,
-      pageReviewCount
+    const localSignals = { verified, imgCount, reviewLen, pageReviewCount };
+
+    getReviewerProfileStats(authorHref, author).then((profileStats) => {
+      const rScore = reviewerScoreFromSignalsAndProfile(localSignals, profileStats);
+      pill.textContent = `Reviewer ${rScore}`;
+
+      const signals = [];
+
+      if (profileStats.totalReviews > 0) {
+        signals.push(
+          `This reviewer has ${profileStats.totalReviews} review${profileStats.totalReviews>1?"s":""} on their public profile (sampled).`
+        );
+      } else {
+        signals.push("No public reviews were detected on this reviewer's profile.");
+      }
+
+      signals.push(
+        `About ${Math.round(profileStats.shareVerified*100)}% of their sampled reviews are Verified Purchases.`
+      );
+      signals.push(
+        `About ${Math.round(profileStats.shareWithImages*100)}% of their sampled reviews include images.`
+      );
+
+      if (pageReviewCount > 1) {
+        signals.push(`This reviewer has ${pageReviewCount} reviews visible on this product's page.`);
+      } else {
+        signals.push("Only this review from this reviewer is visible on this product's page.");
+      }
+
+      const reviewerTipData = {
+        score: rScore,
+        name: author,
+        signals
+      };
+
+      pill.addEventListener("mouseenter", () => showReviewerTooltipNear(pill, reviewerTipData));
+      pill.addEventListener("focus",     () => showReviewerTooltipNear(pill, reviewerTipData));
+    }).catch((e) => {
+      console.warn("[ARC] profile stats error:", e);
+      pill.textContent = "Reviewer";
     });
-    pill.textContent = `Reviewer ${rScore}`;
-
-    const signals = [];
-    if (verified) signals.push("This reviewer purchased this item as a Verified Purchase.");
-    if (imgCount > 0) signals.push(`This reviewer added ${imgCount} image${imgCount>1?"s":""} to their review.`);
-    if (reviewLen > 0) signals.push("This reviewer wrote a non-empty review body on this product.");
-    if (!signals.length) signals.push("Only minimal information is available for this reviewer on this page.");
-
-    const reviewerTipData = {
-      score: rScore,
-      name: author,
-      pageReviewCount,
-      signals
-    };
-
-    pill.addEventListener("mouseenter", () => showReviewerTooltipNear(pill, reviewerTipData));
-    pill.addEventListener("focus",     () => showReviewerTooltipNear(pill, reviewerTipData));
   }
 
   function setupReviewScanTrigger(){
