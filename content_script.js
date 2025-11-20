@@ -437,37 +437,71 @@ function getReviewerProfileStats(authorHref, authorName) {
   return p;
 }
 
+// === REPLACE YOUR EXISTING fetchReviewerProfileStats FUNCTION WITH THIS ===
+
 async function fetchReviewerProfileStats(authorHref, authorName) {
+  // 1. Input Validation
+  if (!authorHref) {
+    return defaultReviewerStats();
+  }
+  
+  // 2. Construct URL
+  const profileUrl = new URL(authorHref, location.origin).toString();
+
+  // 3. Create a hidden iframe to load the profile
+  // We use an iframe so the browser executes Amazon's React/JS to render the reviews.
+  const iframe = document.createElement('iframe');
+  iframe.style.display = "none";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.src = profileUrl;
+  
+  document.body.appendChild(iframe);
+
+  // 4. Wait for load (wrapped in a Promise)
   try {
-    if (!authorHref) {
-      return defaultReviewerStats();
-    }
-    const profileUrl = new URL(authorHref, location.origin).toString();
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timeout")), 8000); // 8s timeout
+      
+      iframe.onload = () => {
+        clearTimeout(timer);
+        // Slight delay to allow React to finish hydration after 'load' fires
+        setTimeout(resolve, 500); 
+      };
+      iframe.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error("Iframe error"));
+      };
+    });
 
-    const res = await fetch(profileUrl, { credentials: "include" });
-    const html = await res.text();
+    // 5. Access the rendered DOM inside the iframe
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
 
-    // crude CAPTCHA / anti-bot wall detection
+    // Check for Captcha/Anti-bot
+    const bodyText = doc.body.textContent || "";
     if (
-      html.includes("Enter the characters you see below") ||
-      html.includes("Type the characters you see in this image")
+      bodyText.includes("Enter the characters you see below") ||
+      bodyText.includes("Type the characters you see in this image")
     ) {
       console.warn("[ARC] Amazon blocked the profile scrape (CAPTCHA detected).");
       return defaultReviewerStats({ error: "CAPTCHA" });
     }
 
-    const doc = new DOMParser().parseFromString(html, "text/html");
-
+    // 6. Improved Selectors for Rendered Content
+    // Note: 'glacier-profile' classes are common in the rendered view
     const cards = Array.from(
       doc.querySelectorAll(
-        '.desktop-profile-content div[data-component-props], .a-section.review, div[id^="profile-at-card"], [data-hook="review"]'
+        '.desktop-profile-content div[data-component-props], .a-section.review, div[id^="profile-at-card"], [data-hook="review"], .glacier-review-card'
       )
-    ).slice(0, 20); // be polite
+    ).slice(0, 20);
 
     if (!cards.length) {
+      // Debugging: helpful to see why it failed in console
+      console.log(`[ARC] No cards found for ${authorName}. Body length: ${bodyText.length}`);
       return defaultReviewerStats();
     }
 
+    // 7. Extract Data (Logic remains mostly the same, just robustified)
     let total = 0;
     let verifiedCount = 0;
     let imgCount = 0;
@@ -476,43 +510,43 @@ async function fetchReviewerProfileStats(authorHref, authorName) {
 
     for (const card of cards) {
       total += 1;
-
       const text = card.textContent || "";
-      if (/verified\s*purchase/i.test(text)) {
-        verifiedCount += 1;
-      }
+      
+      // Check Verified
+      if (/verified\s*purchase/i.test(text)) verifiedCount++;
 
+      // Check Images
       const imgs = card.querySelectorAll('img, [data-hook="review-image-tile"] img');
-      if (imgs.length > 0) {
-        imgCount += 1;
-      }
+      if (imgs.length > 0) imgCount++;
 
-      const ratingText =
-        card.querySelector('[data-hook="review-star-rating"], .a-icon-alt')
-          ?.textContent || "";
-      const rating = parseFloat((ratingText || "").split(" ")[0]);
+      // Check Rating
+      let rating = NaN;
+      const ratingEl = card.querySelector('[data-hook="review-star-rating"], .a-icon-alt');
+      if (ratingEl) {
+        const parts = (ratingEl.textContent || "").split(" ");
+        rating = parseFloat(parts[0]);
+      }
       if (!isNaN(rating)) ratings.push(rating);
 
-      const bodyEl =
-        card.querySelector('[data-hook="review-body"]') ||
-        card.querySelector(".review-text") ||
-        card;
-      const len = (bodyEl.textContent || "").trim().length;
+      // Check Length
+      const bodyEl = card.querySelector('[data-hook="review-body"], .review-text, .review-text-content') || card;
+      // Remove "Read more" text if present
+      const clone = bodyEl.cloneNode(true);
+      const readMore = clone.querySelector('.a-expander-prompt'); 
+      if(readMore) readMore.remove();
+      
+      const len = (clone.textContent || "").trim().length;
       lengths.push(len);
     }
 
     const shareVerified = total ? verifiedCount / total : 0;
     const shareWithImages = total ? imgCount / total : 0;
-    const avgLength = lengths.length
-      ? lengths.reduce((a, b) => a + b, 0) / lengths.length
-      : 0;
+    const avgLength = lengths.length ? lengths.reduce((a, b) => a + b, 0) / lengths.length : 0;
 
     let ratingVar = 0;
     if (ratings.length > 1) {
       const mean = ratings.reduce((a, b) => a + b, 0) / ratings.length;
-      ratingVar =
-        ratings.reduce((acc, r) => acc + (r - mean) * (r - mean), 0) /
-        ratings.length;
+      ratingVar = ratings.reduce((acc, r) => acc + (r - mean) * (r - mean), 0) / ratings.length;
     }
 
     return {
@@ -522,11 +556,18 @@ async function fetchReviewerProfileStats(authorHref, authorName) {
       avgLength,
       ratingVar,
     };
+
   } catch (e) {
-    console.warn("[ARC] reviewer profile scrape failed:", e);
+    console.warn("[ARC] Iframe scrape failed:", e);
     return defaultReviewerStats();
+  } finally {
+    // 8. CLEANUP: Important! Remove the iframe so we don't bloat the DOM
+    if (iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe);
+    }
   }
 }
+
 
 function reviewerScoreFromSignalsAndProfile(localSignals, profileStats) {
   const { verified, imgCount, reviewLen, pageReviewCount } = localSignals;
