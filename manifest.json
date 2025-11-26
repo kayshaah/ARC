@@ -1,60 +1,33 @@
 {
-  "name": "ARC v1 — Amazon Review Classifier",
-  "description": "Amazon Review Classification Extension - Gr7JKR",
-  "version": "1.0",
+  "name": "ARC v2 - ML Powered",
+  "description": "Amazon Review Classifier with ML Backend",
+  "version": "2.0",
   "manifest_version": 3,
-
-  "action": {
-    "default_title": "ARC v1",
-    "default_popup": "hello.html",
-    "default_icon": "icon.png"
-  },
-
-  "permissions": ["scripting", "activeTab", "storage"],
-
+  "permissions": ["storage"],
   "host_permissions": [
     "https://www.amazon.com/*",
-    "https://www.amazon.ca/*",
-    "https://www.amazon.co.uk/*",
     "https://www.amazon.in/*",
-    "https://www.amazon.de/*",
-    "https://www.amazon.it/*",
-    "https://www.amazon.es/*",
-    "https://www.amazon.fr/*",
-    "http://127.0.0.1:8001/*",     // ← dev FastAPI
-    "http://localhost:8001/*"      // ← dev FastAPI
+    "https://www.amazon.co.uk/*",
+    "http://127.0.0.1:8001/*"
   ],
-
+  "action": {
+    "default_title": "ARC",
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
-
-  "content_security_policy": {
-  "extension_pages": "script-src 'self'; object-src 'self'"
-  },
-
-
   "content_scripts": [
     {
       "matches": [
         "https://www.amazon.com/*",
-        "https://www.amazon.ca/*",
-        "https://www.amazon.co.uk/*",
         "https://www.amazon.in/*",
-        "https://www.amazon.de/*",
-        "https://www.amazon.it/*",
-        "https://www.amazon.es/*",
-        "https://www.amazon.fr/*"
+        "https://www.amazon.co.uk/*"
       ],
       "js": ["content_script.js"],
       "run_at": "document_idle"
     }
   ],
-
-  "icons": {
-    "16": "icon.png",
-    "48": "icon.png",
-    "128": "icon.png"
-  }
+  "icons": { "16": "icon.png", "48": "icon.png", "128": "icon.png" }
 }
