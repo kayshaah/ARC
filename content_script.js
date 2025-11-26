@@ -1,4 +1,9 @@
-// --- ARC Content Script ---
+// content_script.js
+
+// --- HELPER: Check for Verified Purchase text ---
+function isVerified(node) {
+  return (node.innerText || "").toLowerCase().includes("verified purchase");
+}
 
 function pick(el, sel) { return el.querySelector(sel); }
 
@@ -12,47 +17,61 @@ async function getScoresFromBackend(reviews) {
 }
 
 async function processReviews() {
-  // 1. Find all review elements that haven't been processed
   const selectors = ['[data-hook="review"]', '.review', '[data-hook="review-card"]'];
   const allReviews = [];
   selectors.forEach(sel => {
     document.querySelectorAll(sel).forEach(el => allReviews.push(el));
   });
 
-  const unbadged = allReviews.filter(el => el.dataset.arcProcessed !== "1");
+  // FILTER: Only process reviews that DO NOT have a badge yet
+  const unbadged = allReviews.filter(el => !el.querySelector('.arc-badge'));
+  
   if (unbadged.length === 0) return;
 
-  // 2. Mark them as processing so we don't duplicate
-  unbadged.forEach(el => el.dataset.arcProcessed = "1");
+  // Mark them temporarily to prevent race conditions
+  unbadged.forEach(el => {
+      const ghost = document.createElement('div');
+      ghost.className = 'arc-badge-placeholder';
+      el.prepend(ghost);
+  });
 
-  // 3. Extract Text
+  // Extract Text
   const payload = unbadged.map(el => ({
     review_title: pick(el, '[data-hook="review-title"]')?.innerText || "",
-    review_body: pick(el, '[data-hook="review-body"]')?.innerText || ""
+    review_body: pick(el, '[data-hook="review-body"]')?.innerText || "",
+    verified_purchase: isVerified(el) // <--- Sending this to backend now
   }));
 
-  // 4. Send to Python
-  console.log(`[ARC] Sending ${payload.length} reviews to ML model...`);
+  // Send to Python
   const scores = await getScoresFromBackend(payload);
 
-  // 5. Render Badges
+  // Render Badges
   unbadged.forEach((el, index) => {
-    const score = scores ? scores[index] : 50; // Default 50 if error
+    // Remove placeholder if exists
+    const ghost = el.querySelector('.arc-badge-placeholder');
+    if(ghost) ghost.remove();
+    
+    // Double check we didn't badge it while waiting
+    if (el.querySelector('.arc-badge')) return;
+
+    const score = scores ? scores[index] : 50; 
     injectBadge(el, score);
   });
 }
 
 function injectBadge(reviewNode, score) {
-  // Determine Color
-  let color = "#ef4444"; // Red (Fake)
+  // Prevent Duplicates (Safety Check)
+  if (reviewNode.querySelector('.arc-badge')) return;
+
+  let color = "#ef4444"; 
   let bg = "#fef2f2";
   let label = "Likely Fake";
 
-  if (score > 40) { color = "#f59e0b"; bg = "#fffbeb"; label = "Neutral"; } // Yellow
-  if (score > 70) { color = "#10b981"; bg = "#ecfdf5"; label = "Genuine"; } // Green
+  if (score >= 40) { color = "#f59e0b"; bg = "#fffbeb"; label = "Neutral"; } 
+  if (score >= 70) { color = "#10b981"; bg = "#ecfdf5"; label = "Genuine"; } 
 
   const badge = document.createElement("div");
-  badge.className = "arc-badge";
+  badge.className = "arc-badge"; // Important class for duplicate checking
   badge.innerHTML = `
     <div style="
       background: ${bg}; color: ${color}; border: 1px solid ${color};
@@ -65,15 +84,11 @@ function injectBadge(reviewNode, score) {
     </div>
   `;
   
-  // Insert at the top of the review
   reviewNode.prepend(badge);
 }
 
-// --- Run Logic ---
-// Run immediately
+// Run Logic
 processReviews();
-
-// Run when user scrolls (to catch lazy loaded reviews)
 let timer;
 window.addEventListener("scroll", () => {
   clearTimeout(timer);
