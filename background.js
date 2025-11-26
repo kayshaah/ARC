@@ -1,96 +1,16 @@
-// === ARC background.js (MV3 service worker) ================================
-console.log("[ARC/bg] loaded");
-
-chrome.runtime.onInstalled.addListener((details) => {
-  console.log("[ARC/bg] onInstalled:", details.reason);
-});
-chrome.runtime.onStartup?.addListener?.(() => {
-  console.log("[ARC/bg] onStartup");
-});
-
-const ARC_API_BASE = "http://127.0.0.1:8001";
-
-// ---- MESSAGE HANDLER -------------------------------------------------------
-let __arcLastResetAt = 0;
+const ARC_API = "http://127.0.0.1:8001";
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  (async () => {
-    try {
-      if (!msg || typeof msg !== "object") return;
-
-      if (msg.type === "ARC_PING") {
-        console.log("[ARC/bg] PING from", sender?.tab?.id);
-        sendResponse({ ok: true, pong: true, time: Date.now() });
-        return;
-      }
-
-      if (msg.type === "ARC_UPLOAD_BATCH" && Array.isArray(msg.payload)) {
-        const n = msg.payload.length;
-        console.log("[ARC/bg] uploading batch:", n);
-        const res = await fetch(`${ARC_API_BASE}/ingest`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reviews: msg.payload }),
-        });
-        const text = await res.text();
-        let body;
-        try { body = JSON.parse(text); } catch { body = { raw: text }; }
-        console.log("[ARC/bg] upload result:", res.status, body);
-        sendResponse({ ok: res.ok, status: res.status, body });
-        return;
-      }
-
-      if (msg.type === "ARC_FORCE_INJECT") {
-        try {
-          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (!tab || !tab.id || !tab.url) {
-            sendResponse({ ok: false, error: "No active tab." });
-            return;
-          }
-          const AMAZON_RE = /^https:\/\/www\.amazon\.(com|ca|co\.uk|in|de|it|es|fr)\//;
-          if (!AMAZON_RE.test(tab.url)) {
-            sendResponse({ ok: false, error: "Not an Amazon page." });
-            return;
-          }
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ["content_script.js"]
-          });
-          sendResponse({ ok: true });
-        } catch (e) {
-          console.error("[ARC/bg] ARC_FORCE_INJECT error:", e);
-          sendResponse({ ok: false, error: String(e) });
-        }
-        return;
-      }
-
-      if (msg.type === "ARC_RESET") {
-        try {
-          const now = Date.now();
-          if (now - __arcLastResetAt < 2000) { // 2s debounce
-            sendResponse({ ok: true, skipped: "debounced" });
-            return;
-          }
-          __arcLastResetAt = now;
-
-          const res = await fetch(`${ARC_API_BASE}/reset`, { method: "POST" });
-          const text = await res.text();
-          let body; try { body = JSON.parse(text); } catch { body = { raw: text }; }
-          console.log("[ARC/bg] reset result:", res.status, body);
-          sendResponse({ ok: res.ok, status: res.status, body });
-        } catch (e) {
-          console.error("[ARC/bg] reset error:", e);
-          sendResponse({ ok: false, error: String(e) });
-        }
-        return;
-      }
-
-      console.warn("[ARC/bg] unknown message:", msg);
-      sendResponse({ ok: false, error: "Unknown message type" });
-    } catch (e) {
-      console.error("[ARC/bg] error:", e);
-      sendResponse({ ok: false, error: String(e) });
-    }
-  })();
-  return true;
+  if (msg.type === "ARC_GET_SCORES") {
+    fetch(`${ARC_API}/score`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(msg.payload)
+    })
+    .then(res => res.json())
+    .then(data => sendResponse({ ok: true, body: data }))
+    .catch(err => sendResponse({ ok: false, error: err.toString() }));
+    
+    return true; // Async wait
+  }
 });
