@@ -1,4 +1,5 @@
 python3 -m venv .venv
 source .venv/bin/activate
-pip install fastapi uvicorn pandas
+pip install fastapi uvicorn pandas scikit-learn
+python train_model.py
 uvicorn app:app --reload --port 8001
