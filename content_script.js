@@ -1,12 +1,25 @@
-// content_script.js
+// content_script.js (Updated Scraper)
 
-// --- HELPER: Check for Verified Purchase text ---
-function isVerified(node) {
-  return (node.innerText || "").toLowerCase().includes("verified purchase");
-}
-
+// --- HELPERS ---
 function pick(el, sel) { return el.querySelector(sel); }
 
+function isVerified(node) {
+  const text = node.innerText || "";
+  return text.toLowerCase().includes("verified purchase");
+}
+
+function getImageCount(node) {
+  // Amazon uses different classes for images depending on layout
+  const imgs = node.querySelectorAll('.review-image-tile, .review-image-section img');
+  return imgs.length;
+}
+
+function getAuthorName(node) {
+  const el = pick(node, '.a-profile-name');
+  return el ? el.innerText.trim() : "Unknown";
+}
+
+// --- API ---
 async function getScoresFromBackend(reviews) {
   return new Promise(resolve => {
     chrome.runtime.sendMessage({ type: "ARC_GET_SCORES", payload: { reviews } }, resp => {
@@ -16,6 +29,7 @@ async function getScoresFromBackend(reviews) {
   });
 }
 
+// --- MAIN LOGIC ---
 async function processReviews() {
   const selectors = ['[data-hook="review"]', '.review', '[data-hook="review-card"]'];
   const allReviews = [];
@@ -23,71 +37,74 @@ async function processReviews() {
     document.querySelectorAll(sel).forEach(el => allReviews.push(el));
   });
 
-  // FILTER: Only process reviews that DO NOT have a badge yet
   const unbadged = allReviews.filter(el => !el.querySelector('.arc-badge'));
-  
   if (unbadged.length === 0) return;
 
-  // Mark them temporarily to prevent race conditions
+  // Mark pending
   unbadged.forEach(el => {
       const ghost = document.createElement('div');
       ghost.className = 'arc-badge-placeholder';
       el.prepend(ghost);
   });
 
-  // Extract Text
+  // 1. EXTRACT DATA FOR FORMULA
   const payload = unbadged.map(el => ({
     review_title: pick(el, '[data-hook="review-title"]')?.innerText || "",
     review_body: pick(el, '[data-hook="review-body"]')?.innerText || "",
-    verified_purchase: isVerified(el) // <--- Sending this to backend now
+    verified_purchase: isVerified(el),
+    image_count: getImageCount(el),  // <--- NEW
+    author_name: getAuthorName(el)   // <--- NEW
   }));
 
-  // Send to Python
   const scores = await getScoresFromBackend(payload);
 
-  // Render Badges
   unbadged.forEach((el, index) => {
-    // Remove placeholder if exists
     const ghost = el.querySelector('.arc-badge-placeholder');
     if(ghost) ghost.remove();
-    
-    // Double check we didn't badge it while waiting
     if (el.querySelector('.arc-badge')) return;
 
-    const score = scores ? scores[index] : 50; 
-    injectBadge(el, score);
+    const scoreData = scores ? scores[index] : { total: 50, label: "?" }; 
+    injectBadge(el, scoreData);
   });
 }
 
-function injectBadge(reviewNode, score) {
-  // Prevent Duplicates (Safety Check)
-  if (reviewNode.querySelector('.arc-badge')) return;
-
-  let color = "#ef4444"; 
-  let bg = "#fef2f2";
+function injectBadge(reviewNode, data) {
+  // Color Logic based on your request
+  // <25 Spam (Red), <50 Likely Fake (Orange), >50 Genuine (Green), >90 High Trust (Blue/Dark Green)
+  let color = "#c53030"; // Red
+  let bg = "#fff5f5";
   let label = "Likely Fake";
 
-  if (score >= 40) { color = "#f59e0b"; bg = "#fffbeb"; label = "Neutral"; } 
-  if (score >= 70) { color = "#10b981"; bg = "#ecfdf5"; label = "Genuine"; } 
+  if (data.total < 25) { 
+      label = "Spam / Suspicious"; 
+      color = "#742a2a"; bg = "#ffe3e3"; // Dark Red
+  } else if (data.total < 50) {
+      label = "Low Confidence"; 
+      color = "#dd6b20"; bg = "#fffaf0"; // Orange
+  } else if (data.total >= 90) {
+      label = "Highly Authentic"; 
+      color = "#276749"; bg = "#f0fff4"; // Dark Green
+  } else {
+      label = "Feels Genuine"; 
+      color = "#38a169"; bg = "#f0fff4"; // Green
+  }
 
   const badge = document.createElement("div");
-  badge.className = "arc-badge"; // Important class for duplicate checking
+  badge.className = "arc-badge";
   badge.innerHTML = `
     <div style="
       background: ${bg}; color: ${color}; border: 1px solid ${color};
-      font-weight: bold; font-size: 12px; padding: 4px 8px; 
-      border-radius: 6px; display: inline-flex; align-items: center; gap: 6px;
-      margin-bottom: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      font-weight: bold; font-size: 11px; padding: 3px 8px; 
+      border-radius: 4px; display: inline-flex; align-items: center; gap: 6px;
+      margin-bottom: 6px; font-family: sans-serif;
     ">
-      <span>ARC Score: ${score}%</span>
-      <span style="opacity: 0.7; font-weight: normal;">| ${label}</span>
+      <span>ARC: ${data.total}/100</span>
+      <span style="opacity: 0.8; font-weight: normal;">| ${label}</span>
     </div>
   `;
-  
   reviewNode.prepend(badge);
 }
 
-// Run Logic
 processReviews();
 let timer;
 window.addEventListener("scroll", () => {
