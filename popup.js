@@ -6,3 +6,7 @@ document.getElementById('scanBtn').addEventListener('click', () => {
     });
   });
 });
+
+// Mock stats for demo
+document.getElementById('scannedCount').innerText = Math.floor(Math.random() * 20) + 5;
+document.getElementById('fakeCount').innerText = Math.floor(Math.random() * 3);
