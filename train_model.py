@@ -5,7 +5,8 @@ import random
 import os
 import ast
 import numpy as np
-from xgboost import XGBClassifier  # <--- The Pro Upgrade
+# from xgboost import XGBClassifier  <-- Removed the broken library
+from sklearn.ensemble import GradientBoostingClassifier # <-- Added the Native Library
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 from sentence_transformers import SentenceTransformer
@@ -83,17 +84,16 @@ if __name__ == "__main__":
     # 2. Vectorize
     embeddings = encoder.encode(df['text'].tolist(), show_progress_bar=True)
     
-    # 3. Train XGBoost (Gradient Boosting)
-    print("🔥 Training XGBoost Classifier...")
+    # 3. Train Gradient Boosting (Scikit-Learn Implementation)
+    print("🔥 Training Gradient Boosting Classifier...")
     X_train, X_test, y_train, y_test = train_test_split(embeddings, df['label'], test_size=0.2)
     
-    # XGBoost configuration for binary classification
-    classifier = XGBClassifier(
+    # Gradient Boosting Configuration (Similar power to XGBoost)
+    classifier = GradientBoostingClassifier(
         n_estimators=100, 
         learning_rate=0.1, 
-        max_depth=6, 
-        use_label_encoder=False, 
-        eval_metric='logloss'
+        max_depth=6,
+        verbose=1
     )
     classifier.fit(X_train, y_train)
     
@@ -107,4 +107,4 @@ if __name__ == "__main__":
     
     with open(MODEL_OUTPUT, 'wb') as f:
         pickle.dump(model_bundle, f)
-    print(f"💾 XGBoost Model saved to {MODEL_OUTPUT}")
+    print(f"💾 Gradient Boosting Model saved to {MODEL_OUTPUT}")
