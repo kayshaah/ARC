@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware
 import pickle
 import os
 import re
+import numpy as np
 
 app = FastAPI()
 
@@ -15,18 +16,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# LOAD ML MODEL
+# LOAD DEEP LEARNING MODEL
 MODEL_PATH = "arc_model.pkl"
-model = None
+encoder = None
+classifier = None
+
 if os.path.exists(MODEL_PATH):
     try:
         with open(MODEL_PATH, 'rb') as f:
-            model = pickle.load(f)
-        print("✅ ML Model Loaded")
-    except:
-        pass
+            bundle = pickle.load(f)
+            encoder = bundle["encoder"]
+            classifier = bundle["classifier"]
+        print("✅ Deep Learning Model (Transformer) Loaded")
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
 
-# DATA MODELS
+# DATA MODELS (Same as before)
 class ReviewIn(BaseModel):
     review_title: Optional[str] = ""
     review_body: Optional[str] = ""
@@ -37,7 +42,6 @@ class ReviewIn(BaseModel):
 class ScoreReq(BaseModel):
     reviews: List[ReviewIn]
 
-# HELPER: Check for weird usernames
 def is_suspicious_name(name):
     if not name: return True
     name = name.lower().strip()
@@ -53,61 +57,60 @@ def score(req: ScoreReq):
     texts = [(r.review_title or "") + " " + (r.review_body or "") for r in req.reviews]
     ml_scores = [0.5] * len(texts)
     
-    if model:
+    # 1. RUN DEEP LEARNING MODEL
+    if encoder and classifier:
         try:
-            probs = model.predict_proba(texts)[:, 1]
+            # Encode text to vectors (Semantic Search)
+            embeddings = encoder.encode(texts)
+            # Predict
+            probs = classifier.predict_proba(embeddings)[:, 1]
             ml_scores = probs
-        except:
+        except Exception as e:
+            print(f"Inference Error: {e}")
             pass
 
     results = []
 
     for i, r in enumerate(req.reviews):
         score = 50 
-        reasons = [] # Collect reasons for the UI
+        reasons = []
 
-        # 1. VERIFIED PURCHASE
+        # --- THE HYBRID FORMULA ---
+        
+        # 1. METADATA LAYER
         if r.verified_purchase: 
             score += 25
             reasons.append({"icon": "✅", "text": "Verified Purchase"})
-        else:
-            reasons.append({"icon": "⚠️", "text": "Unverified Purchase"})
         
-        # 2. IMAGES / VIDEO
         if r.image_count > 0: 
             score += 15
-            reasons.append({"icon": "📸", "text": "Includes real media"})
+            reasons.append({"icon": "📸", "text": "Media verified"})
 
-        # 3. TEXT DETAIL
-        text_len = len(texts[i])
-        if text_len > 400: 
-            score += 15
-            reasons.append({"icon": "📝", "text": "Detailed review"})
-        elif text_len < 30: 
-            score -= 20
-            reasons.append({"icon": "📉", "text": "Suspiciously short text"})
-
-        # 4. ML MODEL OPINION
+        # 2. SEMANTIC LAYER (The ML Score)
         ml_conf = ml_scores[i]
-        if ml_conf > 0.7: score += 10
-        elif ml_conf < 0.4: 
-            score -= 20
-            reasons.append({"icon": "🤖", "text": "AI-like writing style detected"})
+        
+        # High Confidence Real
+        if ml_conf > 0.8: 
+            score += 15
+            reasons.append({"icon": "🧠", "text": "Writing style analysis: Authentic"})
+        # High Confidence Fake
+        elif ml_conf < 0.3: 
+            score -= 25
+            reasons.append({"icon": "🤖", "text": "Writing style analysis: Generic/AI"})
 
-        # 5. USERNAME / HISTORY CHECK
-        is_sus = is_suspicious_name(r.author_name)
-        if is_sus: 
+        # 3. BEHAVIORAL LAYER (Username)
+        if is_suspicious_name(r.author_name): 
             score -= 15
-            history_status = "Suspicious History"
+            history = "Suspicious Profile"
         else:
-            history_status = "Consistent Reviewer"
+            history = "Standard Profile"
 
-        # 6. CAP SCORE
+        # 4. CAP SCORE
         final_score = int(max(0, min(100, score)))
         
-        # DETERMINE LABEL
-        if final_score < 30: label = "Spam"
-        elif final_score < 50: label = "Low Confidence"
+        # Labeling
+        if final_score < 40: label = "Likely Fake"
+        elif final_score < 60: label = "Low Confidence"
         elif final_score >= 90: label = "Highly Authentic"
         else: label = "Feels Genuine"
 
@@ -115,7 +118,7 @@ def score(req: ScoreReq):
             "total": final_score,
             "label": label,
             "reasons": reasons,
-            "history": history_status
+            "history": history
         })
 
     return {"scores": results}
