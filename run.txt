@@ -1,5 +1,5 @@
 python3 -m venv .venv
 source .venv/bin/activate
-pip install fastapi uvicorn pandas scikit-learn xgboost
+pip install fastapi uvicorn pandas scikit-learn sentence-transformers
 python train_model.py
 uvicorn app:app --reload --port 8001
