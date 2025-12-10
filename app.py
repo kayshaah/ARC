@@ -31,7 +31,7 @@ if os.path.exists(MODEL_PATH):
     except Exception as e:
         print(f"❌ Error loading model: {e}")
 
-# DATA MODELS (Same as before)
+# DATA MODELS
 class ReviewIn(BaseModel):
     review_title: Optional[str] = ""
     review_body: Optional[str] = ""
