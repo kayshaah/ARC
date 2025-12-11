@@ -63,7 +63,7 @@ All inference is local or self-hosted.
 
 # ⚙️ Installation 
 
-## *Prerequisite - From the UCSD Amazon Dataset download atleast appliances.jsonl.gz file and extract it to the ARC folder. 
+## *Prerequisite - From the UCSD Amazon Dataset download appliances.jsonl.gz (minimum requirement) file and extract it to the ARC folder. 
 
 ## 1️⃣ Backend Setup
 ```bash
